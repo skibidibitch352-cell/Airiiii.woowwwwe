@@ -1,0 +1,4145 @@
+-- Readability pass: section headings and conservative parameter renaming.
+-- Inferred names are not recovered original source names.
+-- External globals, API keys, string values, and behavior are intended to remain unchanged.
+
+-- Deobfuscated by ollieeee0737 on dc
+-- Detected obfuscation: Luraph v15
+-- Local names are inferred from use (the original names are not in the bytecode)
+
+if getgenv().readySNPWARE then
+	print("already injected snp")
+	return
+end
+
+getgenv().readySNPWARE = true
+getgenv()._SNP_HUB_UNLOCKED = false
+getgenv()._SNP_HUB_UI_READY = false
+getgenv()._SNP_HUB_BOOT_ID = (tonumber(getgenv()._SNP_HUB_BOOT_ID) or 0) + 1
+
+if getgenv()._SNP_MEM_DIAG == nil then
+	getgenv()._SNP_MEM_DIAG = true
+end
+
+if getgenv().valid ~= "vps" and getgenv().valid ~= "github" then
+	game:GetService("Players").LocalPlayer:Kick("Script corrupted")
+	return
+end
+
+print((getgenv().valid == "github" and "Thunder Hub MM2" or "SNPWARE MM2") .. " Loading WH...")
+
+-- ====================================================================
+-- NETWORK CONFIGURATION
+-- ====================================================================
+GITHUB_PROXY_BASE = "http://132.243.222.170:7000/"
+GITHUB_RAW_SOURCES = { "https://raw.githubusercontent.com/Roma77799/Secrethub/refs/heads/main/" }
+VPS_HTTP_TIMEOUT = 4
+local fn
+
+fn = function(...)
+	local snpLoadLog = getgenv().SNP_loadLog
+
+	if type(snpLoadLog) == "function" then
+		snpLoadLog(...)
+	end
+end
+
+snpDebugLogsEnabled = function()
+	return true
+end
+
+missing = function(expectedType, value, fallback)
+	if type(value) == expectedType then
+		return value
+	end
+	return fallback
+end
+
+hubUrl = function(relativePath)
+	return GITHUB_PROXY_BASE .. "hub/" .. tostring(relativePath or ""):gsub("^/+", "")
+end
+
+getProxyCrypt = function()
+	local crypt_ = syn and syn.crypt
+	if missing("table", crypt_, nil) then
+		return crypt_
+	end
+	return missing("table", crypt, nil)
+end
+
+canHubEncrypt = function()
+	local flag = missing("table", getProxyCrypt(), nil) ~= nil
+	local flag2
+
+	if flag then
+		flag2 = missing("function", bit32 and bit32.bxor, nil) ~= nil
+	else
+		flag2 = flag
+	end
+
+	return flag2
+end
+
+cryptBase64Encode = function(cryptoProvider, payload)
+	local v_ = missing("function", cryptoProvider and cryptoProvider.base64encode, nil)
+
+	if not v_ then
+		v_ = missing("function", cryptoProvider and cryptoProvider.base64_encode, nil)
+	end
+
+	local v_2
+
+	if v_ then
+		v_2 = v_
+	else
+		v_2 = missing("function", cryptoProvider and cryptoProvider.encode, nil)
+	end
+
+	if v_2 then
+		return v_2(payload)
+	end
+	return nil
+end
+
+
+-- ====================================================================
+-- CHACHA20 CRYPTOGRAPHY
+-- ====================================================================
+chachaU32 = function(value)
+	return value % 4294967296
+end
+
+chachaRot = function(value, bits)
+	local n = value % 4294967296
+	return chachaU32(bit32.lshift(n, bits) + bit32.rshift(n, 32 - bits))
+end
+
+chachaQr = function(state, a, b, c, d)
+	state[a] = chachaU32(state[a] + state[b])
+	state[d] = chachaRot(bit32.bxor(state[d], state[a]), 16)
+	state[c] = chachaU32(state[c] + state[d])
+	state[b] = chachaRot(bit32.bxor(state[b], state[c]), 12)
+	state[a] = chachaU32(state[a] + state[b])
+	state[d] = chachaRot(bit32.bxor(state[d], state[a]), 8)
+	state[c] = chachaU32(state[c] + state[d])
+	state[b] = chachaRot(bit32.bxor(state[b], state[c]), 7)
+end
+
+chachaBytesToU32 = function(bytes, offset)
+	local n = offset or 1
+	local v_, v_2, v_3, v_4 = string.byte(bytes, n, n + 3)
+	return v_ + v_2 * 256 + v_3 * 65536 + v_4 * 16777216
+end
+
+chachaU32ToBytes = function(value)
+	return string.char(value % 256, math.floor(value / 256) % 256, math.floor(value / 65536) % 256, math.floor(value / 16777216) % 256)
+end
+
+chachaBlock = function(state)
+	local v_ = table.create(16)
+
+	for i = 1, 16 do
+		v_[i] = state[i]
+	end
+
+	for i = 1, 20 do
+		if i % 2 == 1 then
+			chachaQr(v_, 1, 5, 9, 13)
+			chachaQr(v_, 2, 6, 10, 14)
+			chachaQr(v_, 3, 7, 11, 15)
+			chachaQr(v_, 4, 8, 12, 16)
+		else
+			chachaQr(v_, 1, 6, 11, 16)
+			chachaQr(v_, 2, 7, 12, 13)
+			chachaQr(v_, 3, 8, 9, 14)
+			chachaQr(v_, 4, 5, 10, 15)
+		end
+	end
+
+	for i = 1, 16 do
+		state[i] = chachaU32(state[i] + v_[i])
+	end
+end
+
+chacha20Crypt = function(plaintext, key, nonce, counter)
+	if #plaintext == 0 then
+		return ""
+	end
+	local str = #key == 32 and "expand 32-byte k" or "expand 16-byte k"
+	local v_ = table.create(#plaintext)
+	local n = 1
+	counter = counter or 1
+
+	while n <= #plaintext do
+		local v_2 = table.create(16, 0)
+
+		for i = 0, 3 do
+			v_2[i + 1] = chachaBytesToU32(str, i * 4 + 1)
+		end
+
+		for i = 0, 3 do
+			v_2[5 + i] = chachaBytesToU32(key, i * 4 + 1)
+		end
+
+		if #key == 32 then
+			for i = 0, 3 do
+				v_2[9 + i] = chachaBytesToU32(key, 16 + i * 4 + 1)
+			end
+		else
+			for i = 0, 3 do
+				v_2[9 + i] = chachaBytesToU32(key, i * 4 + 1)
+			end
+		end
+
+		v_2[13] = counter
+
+		for i = 0, 2 do
+			v_2[14 + i] = chachaBytesToU32(nonce, i * 4 + 1)
+		end
+
+		chachaBlock(v_2)
+		local tbl = {}
+
+		for i = 1, 16 do
+			tbl[i] = chachaU32ToBytes(v_2[i])
+		end
+
+		local str2 = table.concat(tbl)
+		local n2 = math.min(64, #plaintext - n + 1)
+
+		for i = 0, n2 - 1 do
+			local n3 = n + i
+			local byte = string.byte
+			v_[n3] = string.char(bit32.bxor(string.byte(plaintext, n + i), byte(str2, i + 1)))
+		end
+
+		n += n2
+		counter += 1
+	end
+
+	return table.concat(v_)
+end
+
+CHACHA_KEY = "cte~;2*pXH!uj<r;hC3*DkCF-N9&f~#P"
+
+encryptAuthPayload = function(payload, nonce)
+	if not canHubEncrypt() then
+		return nil
+	end
+	local v_ = getProxyCrypt()
+	local v_2 = chacha20Crypt(payload, CHACHA_KEY, nonce, 1)
+	return cryptBase64Encode(v_, v_2)
+end
+
+
+-- ====================================================================
+-- AUTHENTICATED PROXY REQUESTS
+-- ====================================================================
+buildProxyHeaders = function(url)
+	local str = url:sub(#GITHUB_PROXY_BASE + 1)
+	if str == "" or not canHubEncrypt() then
+		return nil
+	end
+	local str2 = game:GetService("HttpService"):GenerateGUID(false):gsub("-", ""):sub(1, 12)
+	local v_ = encryptAuthPayload(game:GetService("HttpService"):JSONEncode({ m = "GET", path = str, rid = str2 }), str2)
+	if not v_ then
+		return nil
+	end
+	return { ["X-SNP-Enc"] = "1", ["X-SNP-Nonce"] = str2, ["X-SNP-Auth"] = v_ }
+end
+
+isVpsNetworkError = function(errorMessage)
+	local str = tostring(errorMessage or "")
+	return str:find("Timedout", 1, true) or str:find("ConnectFail", 1, true) or str:find("DnsResolve", 1, true) or str:find("Connection refused", 1, true)
+end
+
+markVpsBlocked = function(errorMessage)
+	if not getgenv()._SNP_VPS_BLOCKED and isVpsNetworkError(errorMessage) then
+		getgenv()._SNP_VPS_BLOCKED = true
+		fn("vps_blocked", tostring(errorMessage), "github-only for rest of session")
+
+		if type(getgenv().SNP_flushLoadLog) == "function" then
+			getgenv().SNP_flushLoadLog()
+		end
+	end
+end
+
+hubLoadUsesGithubOnly = function()
+	if getgenv()._SNP_VPS_BLOCKED == true then
+		return true
+	end
+	local snpLoadSource = getgenv()._SNP_LOAD_SOURCE
+	return type(snpLoadSource) == "string" and snpLoadSource:find("github", 1, true) ~= nil
+end
+
+
+-- ====================================================================
+-- HTTP TRANSPORT
+-- ====================================================================
+fetchUrl = function(arg, headers, timeout)
+	local function fn2()
+		local tbl = { Url = arg, Method = "GET" }
+
+		if headers and next(headers) ~= nil then
+			tbl.Headers = headers
+		end
+
+		if timeout and timeout > 0 then
+			tbl.Timeout = timeout
+		end
+
+		return tbl
+	end
+
+	local result, str
+
+	if type(request) == "function" then
+		local ok
+
+		ok, result = pcall(function()
+			return request(fn2())
+		end)
+
+		str = "request"
+		if not ok then
+			return false, nil, nil, "request", result
+		end
+	elseif type(syn) == "table" and type(syn.request) == "function" then
+		local ok
+
+		ok, result = pcall(function()
+			return syn.request(fn2())
+		end)
+
+		str = "syn.request"
+		if not ok then
+			return false, nil, nil, "syn.request", result
+		end
+	else
+		if not (type(http) == "table" and type(http.request) == "function") then
+			if headers then
+				return false, nil, nil, "blocked", "auth headers need request/syn/http"
+			end
+
+			local ok, result2 = pcall(function()
+				return game:HttpGet(arg, true)
+			end)
+
+			if ok and type(result2) == "string" and result2 ~= "" then
+				return true, result2, 200, "game:HttpGet", nil
+			end
+			return false, nil, nil, "game:HttpGet", result2 or "HttpGet failed"
+		end
+
+		local ok
+
+		ok, result = pcall(function()
+			return http.request(fn2())
+		end)
+
+		str = "http.request"
+		if not ok then
+			return false, nil, nil, "http.request", result
+		end
+	end
+
+	if not result then
+		return false, nil, nil, str, "empty response object"
+	end
+	local statusCode = result.StatusCode
+	local body = result.Body
+	if statusCode == 404 then
+		body = type(body) == "string" and body ~= "" and body or "404: Not Found"
+		return true, body, 404, str, nil
+	end
+
+	if statusCode == 401 or statusCode == 403 or statusCode == 429 or statusCode == 502 then
+		return false, body, statusCode, str, "http " .. tostring(statusCode)
+	end
+
+	if statusCode and statusCode >= 200 and statusCode < 300 and type(body) == "string" and body ~= "" then
+		return true, body, statusCode, str, nil
+	end
+	return false, body, statusCode, str, "bad response"
+end
+
+validateHubBody = function(responseBody)
+	if type(responseBody) ~= "string" or responseBody == "" then
+		return false, "empty response"
+	end
+
+	if responseBody:find("<!DOCTYPE", 1, true) or responseBody:find("<html", 1, true) then
+		return false, "HTML error page (blocked or 404)"
+	end
+	return true, responseBody
+end
+
+
+-- ====================================================================
+-- GITHUB AND VPS FALLBACK
+-- ====================================================================
+downloadGithubRaw = function(relativePath, displayName)
+	local str = tostring(relativePath or ""):gsub("^/+", "")
+	displayName = displayName or str
+
+	for i, v_ in ipairs(GITHUB_RAW_SOURCES) do
+		local str2 = v_ .. str
+		local now = tick()
+		fn("github_try", displayName, "mirror=" .. i, str2)
+		local v_2, v_3, v_4, v_5, v_6 = fetchUrl(str2, nil)
+		fn("github_result", displayName, "mirror=" .. i, "ok=" .. tostring(v_2), "code=" .. tostring(v_4), "transport=" .. tostring(v_5), "ms=" .. tostring(math.floor((tick() - now) * 1000)), "bytes=" .. tostring(type(v_3) == "string" and #v_3 or 0), "err=" .. tostring(v_6))
+
+		if v_2 then
+			local v_7, v_8 = validateHubBody(v_3)
+			if v_7 then
+				fn("github_ok", displayName, "mirror=" .. i)
+				return true, v_8, "github#" .. i, v_5
+			end
+		end
+	end
+
+	return false, "all GitHub mirrors failed", nil, nil
+end
+
+downloadHub = function(relativePath, displayName)
+	local v_ = displayName or relativePath
+	local str = tostring(relativePath or ""):gsub("^/+", "")
+
+	if getgenv()._SNP_VPS_BLOCKED ~= true then
+		local v_2 = hubUrl(str)
+		local exitTo = nil
+		local v_3, v_4, v_5, str2
+
+		for i = 1, 2 do
+			local now = tick()
+
+			if i == 1 then
+				fn("vps_try", v_, v_2, "timeout=" .. tostring(VPS_HTTP_TIMEOUT) .. "s")
+			else
+				fn("vps_retry_nonce", v_, "try=" .. i, "new one-shot nonce after 401")
+			end
+
+			local v_6 = VPS_HTTP_TIMEOUT
+			local v_7
+			v_7, v_3, v_4, v_5, str2 = fetchUrl(v_2, buildProxyHeaders(v_2), v_6)
+			fn("vps_result", v_, "ok=" .. tostring(v_7), "code=" .. tostring(v_4), "transport=" .. tostring(v_5), "ms=" .. tostring(math.floor((tick() - now) * 1000)), "bytes=" .. tostring(type(v_3) == "string" and #v_3 or 0), "err=" .. tostring(str2))
+
+			if v_7 and v_4 ~= 404 then
+				exitTo = 1
+				break
+			elseif not (v_4 == 401 and i < 2) then
+				exitTo = 2
+				break
+			end
+		end
+
+		if exitTo == 1 then
+			local v_6, v_7 = validateHubBody(v_3)
+
+			if v_6 then
+				getgenv()._SNP_LOAD_SOURCE = "vps"
+				fn("vps_ok", v_)
+				return true, v_7, "vps", v_5
+			end
+
+			fn("vps_invalid", v_, v_7, "-> github fallback")
+		elseif exitTo == 2 then
+			str2 = str2 or "empty response"
+			local str3
+
+			if v_4 then
+				str3 = str2 .. " (http " .. tostring(v_4) .. ")"
+			else
+				str3 = str2
+			end
+
+			if isVpsNetworkError(str3) then
+				markVpsBlocked(str3)
+			end
+
+			fn("vps_fail", v_, str3, "-> github fallback")
+		end
+	else
+		fn("vps_skip", v_, "blocked host — github only")
+	end
+
+	local v_2, v_3, v_4, v_5 = downloadGithubRaw(str, v_)
+
+	if v_2 then
+		getgenv()._SNP_LOAD_SOURCE = v_4 or "github"
+		fn("load_source", v_, v_4 or "github")
+		return true, v_3, v_4 or "github", v_5
+	end
+
+	fn("all_failed", v_, tostring(v_3))
+	return false, tostring(v_3), nil, nil
+end
+
+local tbl = { ["windui/testconfigs.lua"] = true, ["OtherSCRIPTS/newvoting"] = true }
+
+
+-- ====================================================================
+-- SCRIPT VALIDATION AND EXECUTION
+-- ====================================================================
+hasLuraphMarker = function(scriptBody)
+	if type(scriptBody) ~= "string" or scriptBody == "" then
+		return false
+	end
+	local str = scriptBody:sub(1, 16384)
+	if str:find("Luraph Obfuscator v14%.", 1) then
+		return true
+	end
+
+	if str:find("protected using Luraph", 1, true) then
+		return true
+	end
+
+	if str:find("https://lura%.ph/", 1) then
+		return true
+	end
+	return false
+end
+
+hubLeakKick = function()
+	error("SNPWARE: script init failed (E-4821)")
+end
+
+canHubFileExec = function()
+	return type(writefile) == "function" and type(loadfile) == "function" and type(isfile) == "function" and type(delfile) == "function"
+end
+
+runHubBodyViaLoadfile = function(arg, arg2)
+	local str = ("SNPWARE/_hub_%s_%s.lua"):format(tostring(arg2 or ""):gsub("^/+", ""):gsub("[^%w]+", "_"):sub(1, 48), tostring(os.time()):sub(-6))
+
+	if type(makefolder) == "function" then
+		pcall(makefolder, "SNPWARE")
+	end
+
+	writefile(str, arg)
+
+	local ok, result = pcall(function()
+		return loadfile(str)()
+	end)
+
+	pcall(delfile, str)
+
+	if not ok then
+		error(result)
+	end
+
+	return result
+end
+
+installHubLoadstringCompat = function(arg)
+	local v_ = loadstring
+	if type(v_) ~= "function" then
+		return function()
+		end
+	end
+	local flag = type(load) == "function" and load or nil
+	local loadstring_ = getgenv().loadstring
+
+	getgenv().loadstring = function(arg2, arg3)
+		local v_2 = arg3 or arg
+		local v_3, v_4 = v_(arg2, v_2)
+		if v_3 then
+			return v_3
+		end
+		local str = tostring(v_4 or "")
+		local flag2 = flag
+
+		if flag then
+			local pos = str:find("bytecode", 1, true)
+
+			if pos then
+				flag2 = pos
+			else
+				flag2 = type(arg2) == "string" and arg2:byte(1) == 27
+			end
+		end
+
+		if flag2 then
+			local v_5
+			v_5, v_4 = flag(arg2, v_2)
+			if v_5 then
+				return v_5
+			end
+		end
+
+		return nil, v_4
+	end
+
+	return function()
+		getgenv().loadstring = loadstring_
+	end
+end
+
+runHubBody = function(arg, arg2, arg3)
+	local flag = tbl[tostring(arg2 or ""):gsub("^/+", "")] == true
+
+	if flag and not hasLuraphMarker(arg) then
+		hubLeakKick()
+	end
+
+	local str = "@hub/" .. tostring(arg2 or ""):gsub("^/+", "")
+	local v_ = installHubLoadstringCompat(str)
+
+	local ok, result = pcall(function()
+		local chunk, v_2 = loadstring(arg, str)
+
+		if not chunk then
+			error(v_2 or "compile failed")
+		end
+
+		return chunk()
+	end)
+
+	v_()
+	if ok then
+		return result, "loadstring"
+	end
+
+	if tostring(result or ""):find("bytecode", 1, true) ~= nil and canHubFileExec() then
+		if flag and not hasLuraphMarker(arg) then
+			hubLeakKick()
+		end
+
+		local v_2 = fn
+		local str2 = tostring(arg2 or "")
+		local v_3 = tostring
+		v_2("script_exec_fallback", str2:gsub("^/+", ""), "loadfile", v_3(arg3))
+		return runHubBodyViaLoadfile(arg, arg2), "loadfile"
+	end
+
+	error(result)
+end
+
+runHubScript = function(arg, arg2, arg3)
+	arg2 = arg2 or arg
+	local n = getgenv()._SNP_VPS_BLOCKED == true and 2 or arg3 or 5
+	local result = nil
+
+	for i = 1, n do
+		local ok
+
+		ok, result = pcall(function()
+			local v_, v_2, v_3, v_4 = downloadHub(arg, arg2)
+
+			if not v_ then
+				error(v_2 or "download failed")
+			end
+
+			local v_5, v_6 = runHubBody(v_2, arg, v_4)
+			fn("script_exec mode=" .. tostring(v_6), arg2)
+			return v_5
+		end)
+
+		if ok then
+			return true, result
+		end
+		fn("script_fail", arg2, "attempt=" .. i, tostring(result))
+
+		if i < n then
+			task.wait(1 + i * 0.75)
+		end
+	end
+
+	fn("script_giveup", arg2, tostring(result))
+
+	if type(getgenv().SNP_flushLoadLog) == "function" then
+		getgenv().SNP_flushLoadLog()
+	end
+
+	return false, result
+end
+
+fn("configs_boot", "testconfigs.lua started")
+
+do
+
+-- ====================================================================
+-- WINDUI DEBUGGING
+-- ====================================================================
+	local windUIDebug = {
+		Enabled = false,
+		Build = "dbg-2026-07-12-v9",
+		Dir = "SNPWARE",
+		File = "SNPWARE/WindUI_Debug.log",
+		FlushEvery = 24,
+	}
+
+	local clock = os.clock
+	local date = os.date
+	local tbl2 = {}
+	local flag = false
+	local floor = math.floor
+	local str = string.format("%s_%d", tostring(date("%Y%m%d_%H%M%S")), floor(clock() * 1000) % 100000)
+	local v_ = clock()
+	local tbl3 = {}
+
+	local tbl4 = {
+		New = 0,
+		NewByClass = {},
+		SmoothYields = 0,
+		SmoothTracked = 0,
+		SmoothReveal = 0,
+		BeginSmooth = 0,
+		DropdownRefresh = 0,
+		DropdownRefreshForced = 0,
+		DropdownItemsRendered = 0,
+		DropdownOpen = 0,
+		DropdownClose = 0,
+		ToggleCreate = 0,
+		ButtonCreate = 0,
+		ElementCreate = 0,
+		ElementLockOverlay = 0,
+		ElementHoverOverlay = 0,
+		TabCreate = 0,
+		TabSelect = 0,
+		TabPark = 0,
+		TabAttach = 0,
+		CreateWindow = 0,
+	}
+
+	local tbl5 = {}
+	local n = 0
+	local tbl6 = {}
+
+	local function fn2(arg, arg2, arg3)
+		if type(writefile) ~= "function" then
+			return false, "no_writefile"
+		end
+
+		if arg3 then
+			if type(appendfile) == "function" then
+				local flag2 = false
+				local flag3 = false
+
+				if type(isfile) == "function" then
+					flag2, flag3 = pcall(isfile, arg)
+				end
+
+				if flag2 and flag3 then
+					if pcall(appendfile, arg, arg2) then
+						return true
+					end
+				end
+			end
+
+			local str2 = ""
+
+			if type(readfile) == "function" then
+				local ok
+				ok, str2 = pcall(readfile, arg)
+				ok = ok and type(str2) == "string"
+				local str3 = ""
+
+				if not ok then
+					str2 = str3
+				end
+			end
+
+			local ok, result = pcall(writefile, arg, str2 .. arg2)
+			return ok, result
+		end
+
+		local ok, result = pcall(writefile, arg, arg2)
+		return ok, result
+	end
+
+	local function fn3()
+		if type(makefolder) == "function" then
+			pcall(makefolder, windUIDebug.Dir)
+		end
+	end
+
+	local function fn4()
+		local n2 = clock() - v_
+		return string.format("[%s +%.3fs]", date("%H:%M:%S"), n2)
+	end
+
+	local function fn5()
+		if #tbl2 == 0 then
+			return
+		end
+		fn3()
+		local str2 = table.concat(tbl2)
+		tbl2 = {}
+		fn2(windUIDebug.File, str2, true)
+
+		if type(snpRotateLogFile) == "function" then
+			pcall(snpRotateLogFile, windUIDebug.File, "WINDUI")
+		end
+	end
+
+	local function fn6()
+		if flag then
+			return
+		end
+		flag = true
+
+		task.defer(function()
+			flag = false
+			fn5()
+		end)
+	end
+
+	windUIDebug.IsEnabled = function()
+		if type(snpDebugLogsEnabled) == "function" then
+			return snpDebugLogsEnabled()
+		end
+		return windUIDebug.Enabled == true
+	end
+
+	windUIDebug.Enable = function(arg)
+		windUIDebug.Enabled = arg ~= false
+		windUIDebug.Log("meta", "enabled=" .. tostring(windUIDebug.Enabled))
+	end
+
+	windUIDebug.Log = function(arg, arg2, arg3)
+		if not windUIDebug.IsEnabled() then
+			return
+		end
+		local str2 = string.format("%s [%s] %s", fn4(), tostring(arg or "info"), tostring(arg2 or ""))
+
+		if arg3 ~= nil then
+			if type(arg3) == "table" then
+				local tbl7 = {}
+
+				for k, v_2 in pairs(arg3) do
+					tbl7[#tbl7 + 1] = tostring(k) .. "=" .. tostring(v_2)
+				end
+
+				table.sort(tbl7)
+				str2 ..= " | " .. table.concat(tbl7, " ")
+			else
+				str2 ..= " | " .. tostring(arg3)
+			end
+		end
+
+		tbl2[#tbl2 + 1] = str2 .. "\n"
+
+		if windUIDebug.FlushEvery <= #tbl2 then
+			fn6()
+		end
+	end
+
+	windUIDebug.Inc = function(arg, arg2, arg3)
+		arg2 = arg2 or 1
+		tbl4[arg] = (tbl4[arg] or 0) + arg2
+
+		if arg3 then
+			tbl4.NewByClass[arg3] = (tbl4.NewByClass[arg3] or 0) + arg2
+		end
+	end
+
+	windUIDebug.Mark = function(arg)
+		tbl3[arg] = clock()
+		windUIDebug.Log("mark", "start " .. tostring(arg))
+	end
+
+	windUIDebug.MarkEnd = function(arg, arg2)
+		local v_2 = tbl3[arg]
+		if not v_2 then
+			windUIDebug.Log("mark", "end " .. tostring(arg) .. " (no start)", arg2)
+			return 0
+		end
+		local n2 = clock() - v_2
+		tbl3[arg] = nil
+		tbl5[arg] = (tbl5[arg] or 0) + n2
+		windUIDebug.Log("mark", string.format("end %s dt=%.4fs", tostring(arg), n2), arg2)
+		return n2
+	end
+
+	windUIDebug.SampleFps = function()
+		local ok, result = pcall(function()
+			return game:GetService("RunService")
+		end)
+
+		if not ok or not result then
+			return
+		end
+
+		if n > 0 and clock() - n < 0.25 then
+			return
+		end
+		n = clock()
+		local n2 = 0
+
+		pcall(function()
+			n2 = 1 / result.Heartbeat:Wait()
+		end)
+
+		if n2 > 0 and n2 < 1000 then
+			tbl6[#tbl6 + 1] = n2
+
+			if #tbl6 > 40 then
+				table.remove(tbl6, 1)
+			end
+
+			local n3 = 0
+
+			for i = 1, #tbl6 do
+				n3 += tbl6[i]
+			end
+
+			windUIDebug.Log("fps", string.format("instant=%.1f avg=%.1f samples=%d", n2, n3 / #tbl6, #tbl6), { New = tbl4.New, SmoothYields = tbl4.SmoothYields })
+		end
+	end
+
+	windUIDebug.DumpCounters = function(arg)
+		local tbl7 = {}
+
+		for k, v_2 in pairs(tbl4.NewByClass) do
+			tbl7[#tbl7 + 1] = k .. "=" .. tostring(v_2)
+		end
+
+		table.sort(tbl7)
+
+		windUIDebug.Log("counters", arg or "dump", {
+			New = tbl4.New,
+			SmoothYields = tbl4.SmoothYields,
+			SmoothTracked = tbl4.SmoothTracked,
+			SmoothReveal = tbl4.SmoothReveal,
+			BeginSmooth = tbl4.BeginSmooth,
+			DropdownRefresh = tbl4.DropdownRefresh,
+			DropdownRefreshForced = tbl4.DropdownRefreshForced,
+			DropdownItemsRendered = tbl4.DropdownItemsRendered,
+			DropdownOpen = tbl4.DropdownOpen,
+			DropdownClose = tbl4.DropdownClose,
+			ToggleCreate = tbl4.ToggleCreate,
+			ButtonCreate = tbl4.ButtonCreate,
+			ElementCreate = tbl4.ElementCreate,
+			ElementLockOverlay = tbl4.ElementLockOverlay,
+			ElementHoverOverlay = tbl4.ElementHoverOverlay,
+			TabCreate = tbl4.TabCreate,
+			TabSelect = tbl4.TabSelect,
+			TabPark = tbl4.TabPark,
+			TabAttach = tbl4.TabAttach,
+			CreateWindow = tbl4.CreateWindow,
+		})
+
+		if #tbl7 > 0 then
+			windUIDebug.Log("counters.class", table.concat(tbl7, " "))
+		end
+
+		local tbl8 = {}
+
+		for k, v_2 in pairs(tbl5) do
+			tbl8[#tbl8 + 1] = string.format("%s=%.4fs", k, v_2)
+		end
+
+		table.sort(tbl8)
+
+		if #tbl8 > 0 then
+			windUIDebug.Log("phases", table.concat(tbl8, " "))
+		end
+	end
+
+	windUIDebug.Flush = function()
+		fn5()
+	end
+
+	windUIDebug.AttachCreator = function(arg)
+		if type(arg) ~= "table" then
+			return
+		end
+
+		if arg.__WindUIDebugAttached then
+			return
+		end
+		arg.__WindUIDebugAttached = true
+		local smoothLoading = arg.SmoothLoading or {}
+		windUIDebug.Log("attach", "Creator hooks")
+
+		windUIDebug.Log("version", "UI attached", {
+			debugBuild = windUIDebug.Build,
+			uiBuild = arg.__OptBuild or "MISSING_STALE_UI",
+			InstancesPerYield = smoothLoading.InstancesPerYield,
+			FrameBudget = smoothLoading.FrameBudget,
+			IdleGuiReveal = smoothLoading.IdleGuiReveal,
+			Throttling = smoothLoading.Throttling,
+			hasEndSmooth = type(arg.EndSmoothLoading) == "function",
+			features = "Throttle12 IdleGuiReveal VirtualDropdown slimToggle tabOffTree",
+		})
+
+		local new = arg.New
+
+		if type(new) == "function" then
+			arg.New = function(arg2, arg3, arg4)
+				if type(arg2) == "table" and type(arg3) == "string" then
+					windUIDebug.Inc("New", 1, arg3)
+
+					if tbl4.New % 100 == 0 then
+						windUIDebug.Log("new", "checkpoint", { New = tbl4.New, class = arg3, SmoothYields = tbl4.SmoothYields })
+					end
+
+					return new(arg2, arg3, arg4)
+				end
+
+				windUIDebug.Inc("New", 1, arg2)
+
+				if tbl4.New % 100 == 0 then
+					windUIDebug.Log("new", "checkpoint", { New = tbl4.New, class = arg2, SmoothYields = tbl4.SmoothYields })
+				end
+
+				return new(arg2, arg3, arg4)
+			end
+		end
+
+		local trackSmoothObject = arg.TrackSmoothObject
+
+		if type(trackSmoothObject) == "function" then
+			arg.TrackSmoothObject = function(arg2, arg3)
+				windUIDebug.Inc("SmoothTracked")
+				local v_2 = clock()
+				local createdSinceYield = arg.SmoothLoading and arg.SmoothLoading.CreatedSinceYield or 0
+				local v_3 = trackSmoothObject(arg2, arg3)
+
+				if createdSinceYield > 0 and (arg.SmoothLoading and arg.SmoothLoading.CreatedSinceYield or 0) == 0 and arg.SmoothLoading and arg.SmoothLoading.Enabled then
+					windUIDebug.Inc("SmoothYields")
+
+					if tbl4.SmoothYields % 10 == 0 then
+						windUIDebug.Log("smooth.yield", "budget yield", { yields = tbl4.SmoothYields, New = tbl4.New, dt = string.format("%.5f", clock() - v_2) })
+					end
+				end
+
+				return v_3
+			end
+		end
+
+		local beginSmoothLoading = arg.BeginSmoothLoading
+
+		if type(beginSmoothLoading) == "function" then
+			arg.BeginSmoothLoading = function(arg2)
+				windUIDebug.Inc("BeginSmooth")
+				windUIDebug.Mark("smooth_session")
+
+				windUIDebug.Log("smooth.begin", "BeginSmoothLoading", {
+					uiBuild = arg.__OptBuild,
+					Enabled = arg.SmoothLoading and arg.SmoothLoading.Enabled,
+					InstancesPerYield = arg.SmoothLoading and arg.SmoothLoading.InstancesPerYield,
+					FrameBudget = arg.SmoothLoading and arg.SmoothLoading.FrameBudget,
+					IdleGuiReveal = arg.SmoothLoading and arg.SmoothLoading.IdleGuiReveal,
+					Throttling = arg.SmoothLoading and arg.SmoothLoading.Throttling,
+					FrameCooldown = arg.SmoothLoading and arg.SmoothLoading.FrameCooldown,
+					New = tbl4.New,
+				})
+
+				return beginSmoothLoading(arg2)
+			end
+		end
+
+		local revealSmoothLoading = arg.RevealSmoothLoading
+
+		if type(revealSmoothLoading) == "function" then
+			arg.RevealSmoothLoading = function(arg2, arg3)
+				windUIDebug.Inc("SmoothReveal")
+				windUIDebug.MarkEnd("smooth_session", { token = arg3, New = tbl4.New, SmoothYields = tbl4.SmoothYields })
+				windUIDebug.DumpCounters("on_reveal")
+				windUIDebug.SampleFps()
+				windUIDebug.Flush()
+				return revealSmoothLoading(arg2, arg3)
+			end
+		end
+
+		local configureSmoothLoading = arg.ConfigureSmoothLoading
+
+		if type(configureSmoothLoading) == "function" then
+			arg.ConfigureSmoothLoading = function(arg2, arg3)
+				windUIDebug.Log("smooth.configure", tostring(arg3), type(arg3) == "table" and arg3 or nil)
+				return configureSmoothLoading(arg2, arg3)
+			end
+		end
+	end
+
+	windUIDebug.OnCreateWindow = function(arg, arg2)
+		local v_2
+
+		if type(arg) == "table" and arg.Inc then
+			v_2 = nil
+		else
+			v_2 = arg2
+			arg2 = arg
+		end
+
+		windUIDebug.Inc("CreateWindow")
+		windUIDebug.Mark("create_window")
+		windUIDebug.Log("window", "CreateWindow start", { Title = v_2 and v_2.Title, SmoothLoading = v_2 and v_2.SmoothLoading })
+		return arg2 or clock()
+	end
+
+	windUIDebug.OnCreateWindowEnd = function(arg, arg2)
+		local v_2
+
+		if type(arg) == "table" and arg.Inc then
+			v_2 = nil
+		else
+			v_2 = arg2
+			arg2 = arg
+		end
+
+		windUIDebug.MarkEnd("create_window", { dt = string.format("%.4f", arg2 and clock() - arg2 or 0), New = tbl4.New, hasWindow = v_2 ~= nil })
+		windUIDebug.DumpCounters("create_window_end")
+		windUIDebug.Flush()
+	end
+
+	windUIDebug.OnDropdownRefresh = function(arg)
+		windUIDebug.Inc("DropdownRefresh")
+
+		if arg and arg.forced then
+			windUIDebug.Inc("DropdownRefreshForced")
+		end
+
+		windUIDebug.Log("dropdown.refresh", "Refresh", arg)
+	end
+
+	windUIDebug.OnDropdownItem = function()
+		windUIDebug.Inc("DropdownItemsRendered")
+
+		if tbl4.DropdownItemsRendered % 50 == 0 then
+			windUIDebug.Log("dropdown.item", "rendered checkpoint", { items = tbl4.DropdownItemsRendered, New = tbl4.New })
+		end
+	end
+
+	windUIDebug.OnDropdownOpen = function(arg)
+		windUIDebug.Inc("DropdownOpen")
+		windUIDebug.Mark("dropdown_open")
+		windUIDebug.Log("dropdown.open", "Open", arg)
+	end
+
+	windUIDebug.OnDropdownOpenDone = function(arg)
+		windUIDebug.MarkEnd("dropdown_open", arg)
+		windUIDebug.Flush()
+	end
+
+	windUIDebug.OnDropdownClose = function(arg)
+		windUIDebug.Inc("DropdownClose")
+		windUIDebug.Log("dropdown.close", "Close + Parent=nil", arg)
+	end
+
+	windUIDebug.OnToggleCreate = function(arg)
+		windUIDebug.Inc("ToggleCreate")
+		windUIDebug.Log("toggle", "create", arg)
+	end
+
+	windUIDebug.OnButtonCreate = function(arg)
+		windUIDebug.Inc("ButtonCreate")
+		windUIDebug.Log("button", "create", arg)
+	end
+
+	windUIDebug.OnElementCreate = function(arg)
+		windUIDebug.Inc("ElementCreate")
+
+		if tbl4.ElementCreate % 25 == 0 then
+			windUIDebug.Log("element", "create checkpoint", { count = tbl4.ElementCreate, New = tbl4.New, Title = arg and arg.Title })
+		end
+	end
+
+	windUIDebug.OnElementLockOverlay = function()
+		windUIDebug.Inc("ElementLockOverlay")
+		windUIDebug.Log("element.overlay", "EnsureLockOverlay")
+	end
+
+	windUIDebug.OnElementHoverOverlay = function()
+		windUIDebug.Inc("ElementHoverOverlay")
+		windUIDebug.Log("element.overlay", "EnsureHoverOverlay")
+	end
+
+	windUIDebug.OnTabCreate = function(arg)
+		windUIDebug.Inc("TabCreate")
+		windUIDebug.Log("tab", "create Parent=nil", arg)
+	end
+
+	windUIDebug.OnTabSelect = function(arg)
+		windUIDebug.Inc("TabSelect")
+		windUIDebug.Log("tab.select", "SelectTab", arg)
+	end
+
+	windUIDebug.OnTabPark = function()
+		windUIDebug.Inc("TabPark")
+	end
+
+	windUIDebug.OnTabAttach = function()
+		windUIDebug.Inc("TabAttach")
+	end
+
+	windUIDebug.Section = function(arg)
+		windUIDebug.Mark("section:" .. tostring(arg))
+		local tbl7 = { New = tbl4.New, SmoothYields = tbl4.SmoothYields }
+		windUIDebug.Log("section", "enter " .. tostring(arg), tbl7)
+		windUIDebug.DumpCounters("section:" .. tostring(arg))
+		windUIDebug.Flush()
+	end
+
+	windUIDebug.SectionEnd = function(arg)
+		windUIDebug.MarkEnd("section:" .. tostring(arg))
+		windUIDebug.Flush()
+	end
+
+	fn3()
+	local v_2, v_3 = fn2(windUIDebug.File, "", false)
+	local str2 = "?"
+
+	pcall(function()
+		if identifyexecutor then
+			local v_4, v_5 = identifyexecutor()
+			str2 = tostring(v_4) .. (v_5 and " " .. tostring(v_5) or "")
+		elseif getexecutorname then
+			str2 = tostring(getexecutorname())
+		end
+	end)
+
+	local n2 = 0
+
+	pcall(function()
+		n2 = game.PlaceId
+	end)
+
+	windUIDebug.__ready = true
+
+	windUIDebug.Log("boot", "WindUI debug session start", {
+		build = windUIDebug.Build,
+		session = str,
+		executor = str2,
+		placeId = n2,
+		file = windUIDebug.File,
+		write_ok = tostring(v_2),
+		write_err = tostring(v_3),
+		has_writefile = tostring(type(writefile) == "function"),
+		has_appendfile = tostring(type(appendfile) == "function"),
+		has_readfile = tostring(type(readfile) == "function"),
+		source = "configs_inline",
+	})
+
+	windUIDebug.Log("version", "windui_debug inline", { build = windUIDebug.Build, expectUiBuild = "opt-2026-07-12-v13" })
+	windUIDebug.Log("boot", "optimization flags expected: Throttle12 IdleGuiReveal VirtualDropdown slimDropdown slimToggle lazyOverlays tabOffTree")
+	windUIDebug.Flush()
+	getgenv().WindUIDebug = windUIDebug
+end
+
+local v_
+local lua
+lua, v_ = runHubScript("windui/UI.lua", "WindUI")
+
+if not lua or not v_ then
+	return
+end
+
+do
+	local windUIDebug = getgenv().WindUIDebug
+	local optBuild = type(v_) == "table" and v_.__OptBuild or nil
+
+	if windUIDebug and windUIDebug.Log then
+		windUIDebug.Log("boot", "WindUI module loaded via runHubScript")
+
+		windUIDebug.Log("version", "configs after runHubScript", {
+			uiBuild = optBuild or "MISSING_STALE_UI",
+			debugBuild = windUIDebug.Build or "?",
+			expectUiBuild = "opt-2026-07-12-v13",
+			match = tostring(optBuild == "opt-2026-07-12-v13"),
+			hasEndSmooth = tostring(type(v_) == "table" and type(v_.EndSmoothLoading) == "function"),
+		})
+
+		if windUIDebug.Flush then
+			windUIDebug.Flush()
+		end
+	elseif type(writefile) == "function" then
+		pcall(function()
+			local log = type(readfile) == "function" and isfile and isfile("SNPWARE/WindUI_Debug.log")
+			local str = ""
+
+			if log then
+				str = readfile("SNPWARE/WindUI_Debug.log") or ""
+			end
+
+			writefile("SNPWARE/WindUI_Debug.log", str .. string.format("[%s] [version] WindUI loaded but WindUIDebug missing uiBuild=%s (stale?)\n", os.date("%c"), tostring(optBuild or "MISSING")))
+
+			if type(snpRotateLogFile) == "function" then
+				pcall(snpRotateLogFile, "SNPWARE/WindUI_Debug.log", "WINDUI")
+			end
+		end)
+	end
+end
+
+getgenv()._SNP_STATS_WS_GEN = (getgenv()._SNP_STATS_WS_GEN or 0) + 1
+
+if getgenv()._SNP_STATS_WS then
+	pcall(function()
+		getgenv()._SNP_STATS_WS:Close()
+	end)
+
+	getgenv()._SNP_STATS_WS = nil
+end
+
+
+-- ====================================================================
+-- ROBLOX SERVICES
+-- ====================================================================
+local Players
+Players = game:GetService("Players")
+local localPlayer
+localPlayer = Players.LocalPlayer
+
+sectionLoaded = function(arg)
+	print("[" .. (getgenv().valid == "github" and "Thunder Hub" or "SNPWARE") .. "] section " .. arg .. " loaded")
+	local windUIDebug = getgenv().WindUIDebug
+
+	if windUIDebug and windUIDebug.Section then
+		windUIDebug.Section(arg)
+	end
+
+	local v_2 = Window
+
+	if type(v_2) == "table" and type(v_2.SetLoadProgress) == "function" then
+		local v_3 = SNP_LOAD_SECTIONS
+
+		if type(v_3) == "table" and #v_3 > 0 then
+			local n = 0
+
+			for i, v_4 in ipairs(v_3) do
+				if v_4 == arg then
+					n = i
+					break
+				end
+			end
+
+			if n > 0 then
+				local n2 = n / #v_3
+
+				pcall(function()
+					v_2:SetLoadProgress(n2, arg)
+				end)
+			end
+		end
+	end
+end
+
+task.spawn(function()
+	if getgenv().R3TH_Device == "Mobile" or getgenv().R3TH_Device == "PC" then
+		if not runHubScript("OtherSCRIPTS/newvoting", "newvoting") then
+			return
+		end
+	end
+end)
+
+local TextService
+TextService = game:GetService("TextService")
+local UserInputService
+UserInputService = game:GetService("UserInputService")
+local TextChatService
+TextChatService = game:GetService("TextChatService")
+local ReplicatedStorage
+ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Lighting
+Lighting = game:GetService("Lighting")
+local CoreGui
+CoreGui = game:GetService("CoreGui")
+local RunService
+RunService = game:GetService("RunService")
+local Workspace
+Workspace = game:GetService("Workspace")
+local TweenService
+TweenService = game:GetService("TweenService")
+STANDARD_KNIFE_MESH = "http://www.roblox.com/asset/?id=121944778"
+STANDARD_GUN_MESH = "http://www.roblox.com/asset/?id=79401392"
+DEFAULT_KNIFE_TEX = "http://www.roblox.com/asset/?id=121944805"
+DEFAULT_GUN_TEX = "http://www.roblox.com/asset/?id=91723031"
+DEFAULT_KNIFE_TOOL_ICON = "rbxassetid://584555920"
+DEFAULT_GUN_TOOL_ICON = "rbxassetid://197518111"
+local HttpService
+HttpService = game:GetService("HttpService")
+local AssetService
+AssetService = game:GetService("AssetService")
+local Stats
+Stats = game:GetService("Stats")
+local ContentProvider
+ContentProvider = game:GetService("ContentProvider")
+local VirtualInputManager
+VirtualInputManager = game:GetService("VirtualInputManager")
+
+if getgenv().R3TH_Device == nil then
+	setclipboard("loadstring(game:HttpGet('https://api.snpware.xyz/auth'))()")
+	localPlayer:Kick("not proven script. Take a look at your clipboard—the actual script is there")
+	return
+end
+
+executor = function()
+	if identifyexecutor then
+		local ok, result, result2 = pcall(identifyexecutor)
+
+		if ok and result then
+			if result2 then
+				return tostring(result) .. " " .. tostring(result2)
+			end
+			return tostring(result)
+		end
+	end
+
+	if getexecutorname then
+		local ok, result = pcall(getexecutorname)
+		if ok and result then
+			return tostring(result)
+		end
+	end
+
+	if syn and syn.environment then
+		return "Synapse"
+	end
+
+	if fluxus then
+		return "Fluxus"
+	end
+
+	if KRNL_LOADED then
+		return "KRNL"
+	end
+
+	if scriptable_lib or is_sirhurt_closure then
+		return "SirHurt"
+	end
+	return "Executor"
+end
+
+if type(getcustomasset) ~= "function" and type(getsynasset) == "function" then
+	getcustomasset = getsynasset
+end
+
+
+-- ====================================================================
+-- EXECUTOR CAPABILITY CHECKS
+-- ====================================================================
+func = {
+	file = missing("function", readfile, false) and missing("function", writefile, false) and missing("function", isfile, false),
+	clonef = missing("function", cloneref, false),
+	hook = missing("function", hookmetamethod, false) and missing("function", hookfunction, false),
+	hwid = missing("function", gethwid, false),
+	fire = missing("function", firetouchinterest, false),
+	getgn = missing("function", getgenv, false),
+	signal = missing("function", replicatesignal, false),
+	hidden = missing("function", sethiddenproperty, false),
+	request = missing("function", request, false),
+	getcustomasset = missing("function", getcustomasset, false),
+	setfpscap = missing("function", setfpscap, false),
+	getconnections = missing("function", getconnections, false),
+	firesignal = missing("function", firesignal, false),
+	rconsole = missing("function", rconsoleprint, false) or missing("function", rprintconsole, false) or missing("function", consoleprint, false),
+}
+
+passedUNC = 0
+totalUNC = 0
+print("--- sUNC testing ---")
+
+for k, v_2 in pairs(func) do
+	totalUNC = totalUNC + 1
+
+	if v_2 then
+		passedUNC = passedUNC + 1
+	end
+
+	local v_3 = print
+	local format = string.format
+	v_2 = v_2 and "+"
+	v_3(format("[%s] %s", v_2 or "-", k))
+end
+
+scoreUNC = math.floor(passedUNC / totalUNC * 100)
+ratingUNC = scoreUNC == 100 and "PERFECT" or scoreUNC >= 50 and "GOOD" or "BAD"
+print(string.format("--- result: %d%% (%s) ---", scoreUNC, ratingUNC))
+CUSTOM_ASSETS_CDN_ENABLED = type(getcustomasset) == "function"
+
+if not func.getgn or not func.request or not func.file then
+	localPlayer:Kick("Very bad executor, try another")
+	return
+end
+
+adorns = {}
+
+-- ====================================================================
+-- LOGGING AND CONFIGURATION
+-- ====================================================================
+SNP_LOG_DIR = "SNPWARE"
+SNP_LOG_MAX_BYTES = 7340032
+SNP_LOG_KEEP_RATIO = 0.4
+ESP_LOG_FILE = SNP_LOG_DIR .. "/ESP_Debug.log"
+SKIN_LOG_FILE = SNP_LOG_DIR .. "/SkinChanger_Debug.log"
+HUB_CONFIG_GEN_SUFFIX = "_generation_2"
+HUB_CONFIG_DIR = SNP_LOG_DIR .. "/config/"
+HUB_LAST_CONFIG_FILE = HUB_CONFIG_DIR .. "last_selected.txt"
+HUB_AUTOSTART_CONFIG_FILE = HUB_CONFIG_DIR .. "autostart_config.txt"
+HUB_WEBHOOKS_DIR = SNP_LOG_DIR .. "/webhooks/"
+espLogLines = {}
+espLogFlushQueued = false
+skinLogLines = {}
+skinLogFlushQueued = false
+
+ensureSnpLogDir = function()
+	if type(makefolder) ~= "function" then
+		return
+	end
+	pcall(makefolder, SNP_LOG_DIR)
+	pcall(makefolder, HUB_WEBHOOKS_DIR)
+end
+
+snpTrimLogLines = function(arg, arg2)
+	if type(arg) ~= "table" or #arg == 0 then
+		return false
+	end
+	arg2 = arg2 or SNP_LOG_MAX_BYTES
+	local n = 0
+
+	for i = 1, #arg do
+		n = n + #tostring(arg[i]) + 1
+	end
+
+	if n <= arg2 then
+		return false
+	end
+	local n2 = math.floor(arg2 * (SNP_LOG_KEEP_RATIO or 0.4))
+	local n3 = #arg
+	local n4 = 0
+
+	while n3 > 1 and n4 < n2 do
+		n4 = n4 + #tostring(arg[n3]) + 1
+		n3 -= 1
+	end
+
+	local tbl2 = {}
+
+	for i = n3, #arg do
+		tbl2[#tbl2 + 1] = arg[i]
+	end
+
+	for i = #arg, 1, -1 do
+		arg[i] = nil
+	end
+
+	arg[1] = string.format("[%s] log buffer trimmed kept~%dB from %dB", os.date("%X"), n4, n)
+
+	for i = 1, #tbl2 do
+		arg[i + 1] = tbl2[i]
+	end
+
+	return true
+end
+
+snpRotateLogFile = function(arg, arg2, arg3)
+	if type(arg) ~= "string" or arg == "" then
+		return false
+	end
+
+	if type(writefile) ~= "function" or type(readfile) ~= "function" then
+		return false
+	end
+	local n = tonumber(arg3) or SNP_LOG_MAX_BYTES or 7340032
+	local flag = false
+
+	pcall(function()
+		if type(isfile) == "function" then
+			local ok, result = pcall(isfile, arg)
+			if not (ok and result) then
+				return
+			end
+		end
+
+		local ok, result = pcall(readfile, arg)
+		if not ok or type(result) ~= "string" then
+			return
+		end
+
+		if #result <= n then
+			return
+		end
+		local str = string.sub(result, -math.floor(n * (SNP_LOG_KEEP_RATIO or 0.4)))
+		local v_2 = string.find(str, "\n", 1, true)
+		local str2
+
+		if v_2 then
+			str2 = string.sub(str, v_2 + 1)
+		else
+			str2 = str
+		end
+
+		writefile(arg, string.format("[%s] rotated %s was=%dB kept=%dB\n", tostring(arg2 or "LOG"), os.date("%X"), #result, #str2) .. str2)
+		flag = true
+	end)
+
+	return flag
+end
+
+sanitizeHubConfigName = function(configName)
+	if type(configName) ~= "string" then
+		return nil
+	end
+	local match = configName:match("^%s*(.-)%s*$")
+	if not match or match == "" then
+		return nil
+	end
+	local str = match:gsub("[\\/:*?\"<>|]", "")
+	if str == "" then
+		return nil
+	end
+	return str
+end
+
+hubConfigIsValidStorageName = function(storageName)
+	if type(storageName) ~= "string" then
+		return false
+	end
+
+	if #storageName <= #HUB_CONFIG_GEN_SUFFIX then
+		return false
+	end
+	local v_2 = HUB_CONFIG_GEN_SUFFIX
+	if storageName:sub(-#HUB_CONFIG_GEN_SUFFIX) ~= v_2 then
+		return false
+	end
+	local str = storageName:sub(1, #storageName - #HUB_CONFIG_GEN_SUFFIX)
+	return sanitizeHubConfigName(str) == str
+end
+
+hubConfigDisplayName = function(storageName)
+	if not hubConfigIsValidStorageName(storageName) then
+		return nil
+	end
+	return storageName:sub(1, #storageName - #HUB_CONFIG_GEN_SUFFIX)
+end
+
+hubConfigStorageName = function(configName)
+	local str = sanitizeHubConfigName(configName)
+	if not str then
+		return nil
+	end
+	local v_2 = HUB_CONFIG_GEN_SUFFIX
+
+	if str:sub(-#HUB_CONFIG_GEN_SUFFIX) == v_2 then
+		str = str:sub(1, #str - #HUB_CONFIG_GEN_SUFFIX)
+	end
+
+	if str == "" then
+		return nil
+	end
+	return str .. HUB_CONFIG_GEN_SUFFIX
+end
+
+hubConfigPath = function(configName)
+	local v_2 = hubConfigStorageName(configName)
+	if not v_2 then
+		return HUB_CONFIG_DIR .. ".json"
+	end
+	return HUB_CONFIG_DIR .. v_2 .. ".json"
+end
+
+hubConfigPurgeInvalidFiles = function()
+	local tbl2 = {}
+	if not listfiles or not isfile or not delfile then
+		return tbl2
+	end
+
+	if not isfolder then
+		return tbl2
+	end
+
+	if not isfolder(HUB_CONFIG_DIR) then
+		if makefolder then
+			pcall(makefolder, SNP_LOG_DIR)
+			pcall(makefolder, HUB_CONFIG_DIR)
+		end
+
+		return tbl2
+	end
+
+	for _, v_2 in ipairs(listfiles(HUB_CONFIG_DIR)) do
+		if type(v_2) == "string" then
+			local match = v_2:match("([^\\/]+)%.json$")
+
+			if match and isfile(v_2) and not hubConfigIsValidStorageName(match) then
+				configDbg("INFO", "purge", "delete old-generation config file", { path = v_2, storageName = match, needSuffix = HUB_CONFIG_GEN_SUFFIX })
+
+				if pcall(delfile, v_2) then
+					tbl2[#tbl2 + 1] = match
+				end
+			end
+		end
+	end
+
+	return tbl2
+end
+
+snpResetLogFile = function(arg, arg2)
+	if not writefile then
+		return
+	end
+
+	if type(snpDebugLogsEnabled) == "function" and not snpDebugLogsEnabled() then
+		return
+	end
+
+	pcall(function()
+		ensureSnpLogDir()
+		writefile(arg, string.format("[%s] session %s\n", arg2, os.date("%X")))
+	end)
+end
+
+snpWriteLogFile = function(arg, arg2)
+	if not writefile or not arg2 or #arg2 == 0 then
+		return
+	end
+
+	if type(snpDebugLogsEnabled) == "function" and not snpDebugLogsEnabled() then
+		return
+	end
+
+	pcall(function()
+		ensureSnpLogDir()
+		snpTrimLogLines(arg2, SNP_LOG_MAX_BYTES)
+		writefile(arg, table.concat(arg2, "\n") .. "\n")
+		snpRotateLogFile(arg, arg:match("([^/\\]+)%.log$") or "LOG")
+	end)
+end
+
+flushEspLog = function()
+	snpWriteLogFile(ESP_LOG_FILE, espLogLines)
+end
+
+espLog = function(...)
+	local v_2 = table.pack(...)
+	if type(snpDebugLogsEnabled) == "function" and not snpDebugLogsEnabled() then
+		return
+	end
+	local tbl2 = { "[ESP]", os.date("%X") }
+
+	for i = 1, select("#", ...) do
+		tbl2[#tbl2 + 1] = tostring(select(i, table.unpack(v_2, 1, v_2.n)))
+	end
+
+	if not writefile then
+		return
+	end
+	table.insert(espLogLines, table.concat(tbl2, " "))
+
+	if not espLogFlushQueued then
+		espLogFlushQueued = true
+
+		task.defer(function()
+			espLogFlushQueued = false
+			flushEspLog()
+		end)
+	end
+end
+
+flushSkinLog = function()
+	snpWriteLogFile(SKIN_LOG_FILE, skinLogLines)
+end
+
+skinLog = function(...)
+	local v_2 = table.pack(...)
+	if type(snpDebugLogsEnabled) == "function" and not snpDebugLogsEnabled() then
+		return
+	end
+	local tbl2 = { "[SKIN]", os.date("%X") }
+
+	for i = 1, select("#", ...) do
+		tbl2[#tbl2 + 1] = tostring(select(i, table.unpack(v_2, 1, v_2.n)))
+	end
+
+	if not writefile then
+		return
+	end
+	table.insert(skinLogLines, table.concat(tbl2, " "))
+
+	if not skinLogFlushQueued then
+		skinLogFlushQueued = true
+
+		task.defer(function()
+			skinLogFlushQueued = false
+			flushSkinLog()
+		end)
+	end
+end
+
+itemspawnerLog = function(...)
+	skinLog(...)
+end
+
+snpResetLogFile(ESP_LOG_FILE, "ESP")
+snpResetLogFile(SKIN_LOG_FILE, "SKIN")
+HUB_BTN_LOG_FILE = SNP_LOG_DIR .. "/HubButtons_Debug.log"
+hubBtnLogLines = {}
+hubBtnLogFlushQueued = false
+
+flushHubBtnLog = function()
+	snpWriteLogFile(HUB_BTN_LOG_FILE, hubBtnLogLines)
+end
+
+hubBtnLog = function(...)
+	local v_2 = table.pack(...)
+	if type(snpDebugLogsEnabled) == "function" and not snpDebugLogsEnabled() then
+		return
+	end
+	local tbl2 = { "[HUBBTN]", os.date("%X") }
+
+	for i = 1, select("#", ...) do
+		tbl2[#tbl2 + 1] = tostring(select(i, table.unpack(v_2, 1, v_2.n)))
+	end
+
+	if not writefile then
+		return
+	end
+	table.insert(hubBtnLogLines, table.concat(tbl2, " "))
+
+	if not hubBtnLogFlushQueued then
+		hubBtnLogFlushQueued = true
+
+		task.defer(function()
+			hubBtnLogFlushQueued = false
+			flushHubBtnLog()
+		end)
+	end
+end
+
+snpResetLogFile(HUB_BTN_LOG_FILE, "HUBBTN")
+CONFIG_LOG_FILE = SNP_LOG_DIR .. "/Config_Debug.log"
+CONFIG_VERBOSE_APPLY = false
+configLogLines = {}
+configLogFlushQueued = false
+
+snpEncodeLogData = function(arg)
+	if arg == nil then
+		return ""
+	end
+
+	if type(arg) ~= "table" then
+		return tostring(arg)
+	end
+	local tbl2 = {}
+
+	for k, v_2 in pairs(arg) do
+		local str
+
+		if typeof(v_2) == "Vector3" then
+			str = string.format("V3(%.4f,%.4f,%.4f)", v_2.X, v_2.Y, v_2.Z)
+		elseif typeof(v_2) == "Color3" then
+			local floor = math.floor
+			local n = v_2.B * 255
+			str = string.format("RGB(%d,%d,%d)", math.floor(v_2.R * 255), math.floor(v_2.G * 255), floor(n))
+		elseif type(v_2) == "table" then
+			str = snpEncodeLogData(v_2)
+		else
+			str = tostring(v_2)
+		end
+
+		tbl2[#tbl2 + 1] = tostring(k) .. "=" .. str
+	end
+
+	table.sort(tbl2)
+	return "{" .. table.concat(tbl2, ", ") .. "}"
+end
+
+flushConfigLog = function()
+	snpWriteLogFile(CONFIG_LOG_FILE, configLogLines)
+end
+
+configDbg = function(arg, arg2, arg3, arg4)
+	local v_2 = tostring
+	local str = string.format("[%s][%s][%s] %s", os.date("%X"), tostring(arg), tostring(arg2), v_2(arg3))
+
+	if arg4 ~= nil then
+		str ..= " | " .. snpEncodeLogData(arg4)
+	end
+
+	if not writefile then
+		return
+	end
+	table.insert(configLogLines, str)
+
+	if not configLogFlushQueued then
+		configLogFlushQueued = true
+
+		task.defer(function()
+			configLogFlushQueued = false
+			flushConfigLog()
+		end)
+	end
+end
+
+hubLogCombatState = function(arg)
+	if type(values) ~= "table" then
+		return
+	end
+	local flag = type(dropdownval) == "table" and type(dropdownval.silentAimActions) == "table"
+	local str = "none"
+
+	if flag then
+		str = table.concat(dropdownval.silentAimActions, "+")
+		local str2 = "none"
+
+		if str == "" then
+			str = str2
+		end
+	end
+
+	configDbg("INFO", "combat", "combat state", {
+		reason = tostring(arg or "?"),
+		device = tostring(getgenv().R3TH_Device or "?"),
+		autoshoot = values.shoot == true,
+		silentAimPC = values.silentAim == true,
+		silentAimHook = values.silentAimhook == true,
+		shootMurderBtn = values.btn_shootmurder_enabled == true,
+		knifeAim = values.KnifeAimEnabled == true,
+		aimMode = type(dropdownval) == "table" and tostring(dropdownval.silentAimType) or "?",
+		aimActions = str,
+		wallCheck = raycastsheriff1 == true,
+		aimStats = values.silentAimStat == true,
+	})
+end
+
+USER_ACTION_LOG_FILE = SNP_LOG_DIR .. "/UserActions_Debug.log"
+userActionLogLines = {}
+userActionLogFlushQueued = false
+userActionLogStarted = false
+USER_ACTION_DEBOUNCE = 0.35
+USER_ACTION_CONTINUOUS = { Slider = true, Input = true, Colorpicker = true }
+userActionLast = {}
+userActionPending = {}
+userActionTimer = {}
+
+flushUserActionLog = function()
+	snpWriteLogFile(USER_ACTION_LOG_FILE, userActionLogLines)
+end
+
+userActionWrite = function(arg, arg2, arg3)
+	local v_2 = snpEncodeLogData(arg3)
+	if userActionLast[arg] == v_2 then
+		return
+	end
+	userActionLast[arg] = v_2
+	userActionLogLines[#userActionLogLines + 1] = string.format("[UI] %s %s %s=%s", os.date("%X"), tostring(arg2), tostring(arg), v_2)
+
+	if not userActionLogFlushQueued then
+		userActionLogFlushQueued = true
+
+		task.defer(function()
+			userActionLogFlushQueued = false
+			flushUserActionLog()
+		end)
+	end
+end
+
+userActionRecord = function(arg, arg2, ...)
+	local v_2 = table.pack(...)
+	if hubConfigLoading then
+		return
+	end
+
+	if not writefile then
+		return
+	end
+
+	if type(snpDebugLogsEnabled) == "function" and not snpDebugLogsEnabled() then
+		return
+	end
+	local value = select("#", ...)
+	local str
+
+	if value == 0 then
+		str = "(pressed)"
+	elseif value == 1 then
+		str = v_2[1]
+	else
+		str = { table.unpack(v_2, 1, v_2.n) }
+	end
+
+	if USER_ACTION_CONTINUOUS[arg2] then
+		userActionPending[arg] = { kind = arg2, value = str }
+
+		if not userActionTimer[arg] then
+			userActionTimer[arg] = true
+
+			task.delay(USER_ACTION_DEBOUNCE, function()
+				userActionTimer[arg] = nil
+				local v_3 = userActionPending[arg]
+				userActionPending[arg] = nil
+
+				if v_3 then
+					userActionWrite(arg, v_3.kind, v_3.value)
+				end
+			end)
+		end
+
+		return
+	end
+
+	userActionWrite(arg, arg2, str)
+end
+
+hubInstallUserActionLogging = function(arg)
+	if not Window or type(Window.PendingFlags) ~= "table" then
+		return 0
+	end
+
+	if not userActionLogStarted then
+		userActionLogStarted = true
+		snpResetLogFile(USER_ACTION_LOG_FILE, "UI")
+	end
+
+	local n = 0
+
+	for k, pendingFlag in pairs(Window.PendingFlags) do
+		if type(pendingFlag) == "table" and type(pendingFlag.Callback) == "function" and not pendingFlag.__snpUserLogged then
+			pendingFlag.__snpUserLogged = true
+			local callback = pendingFlag.Callback
+			local str = tostring(pendingFlag.__type or "?")
+
+			pendingFlag.Callback = function(...)
+				local v_2 = table.pack(...)
+				pcall(userActionRecord, k, str, ...)
+				return callback(table.unpack(v_2, 1, v_2.n))
+			end
+
+			n += 1
+		end
+	end
+
+	if n > 0 then
+		configDbg("INFO", "ui", "user action logging installed", { reason = tostring(arg or "?"), wrapped = n })
+	end
+
+	return n
+end
+
+snpResetLogFile(CONFIG_LOG_FILE, "CONFIG")
+
+configDbg("INFO", "boot", "Config system initialized", {
+	logFile = CONFIG_LOG_FILE,
+	configDir = HUB_CONFIG_DIR,
+	writefile = writefile ~= nil,
+	verboseApply = CONFIG_VERBOSE_APPLY,
+})
+
+AUTOFARM_LOG_FILE = SNP_LOG_DIR .. "/Autofarm_Debug.log"
+AUTOFARM_TRACE_MAX = true
+autofarmLogLines = {}
+autofarmLogFlushQueued = false
+autofarmLogSeq = 0
+autofarmLogPending = 0
+autofarmLoopTick = 0
+autofarmSessionT0 = os.clock()
+autofarmTraceHooksInstalled = false
+autofarmGameplayEyeInstalled = false
+autofarmLastHeartbeatLog = 0
+autofarmCoinCollectCount = 0
+autofarmLastPdEye = nil
+autofarmEyeMapName = nil
+autofarmCachedCoinContainer = nil
+
+autofarmAppendLogChunk = function(arg)
+	if not writefile or not arg or arg == "" then
+		return
+	end
+
+	if type(snpDebugLogsEnabled) == "function" and not snpDebugLogsEnabled() then
+		return
+	end
+
+	pcall(function()
+		ensureSnpLogDir()
+
+		if type(appendfile) == "function" then
+			local flag = false
+
+			if type(isfile) == "function" then
+				local result
+				flag, result = pcall(isfile, AUTOFARM_LOG_FILE)
+				flag = flag and result
+			end
+
+			if flag then
+				if pcall(appendfile, AUTOFARM_LOG_FILE, arg) then
+					snpRotateLogFile(AUTOFARM_LOG_FILE, "AUTOFARM", 7340032)
+					return
+				end
+			end
+		end
+
+		local str = ""
+
+		if type(readfile) == "function" then
+			local ok
+			ok, str = pcall(readfile, AUTOFARM_LOG_FILE)
+			ok = ok and type(str) == "string"
+			local str2 = ""
+
+			if not ok then
+				str = str2
+			end
+		end
+
+		writefile(AUTOFARM_LOG_FILE, str .. arg)
+		snpRotateLogFile(AUTOFARM_LOG_FILE, "AUTOFARM", 7340032)
+	end)
+end
+
+flushAutofarmLog = function()
+	if not autofarmLogLines or #autofarmLogLines == 0 then
+		return
+	end
+	local str = table.concat(autofarmLogLines, "\n") .. "\n"
+	autofarmLogLines = {}
+	autofarmLogPending = 0
+	autofarmAppendLogChunk(str)
+end
+
+autofarmDbg = function(arg, arg2, arg3, arg4)
+	if type(snpDebugLogsEnabled) == "function" and not snpDebugLogsEnabled() then
+		return
+	end
+
+	if (arg == "TRACE" or arg == "DEBUG") and not AUTOFARM_TRACE_MAX then
+		return
+	end
+
+	if type(arg4) == "function" then
+		local ok, result = pcall(arg4)
+		arg4 = ok and result or { err = tostring(result) }
+	end
+
+	autofarmLogSeq = (autofarmLogSeq or 0) + 1
+	local n = os.clock() - (autofarmSessionT0 or os.clock())
+	local v_2 = autofarmLogSeq
+	local v_3 = tostring
+	local str = string.format("[%s +%.3fs #%d][%s][%s] %s", os.date("%X"), n, v_2, tostring(arg), tostring(arg2), v_3(arg3))
+
+	if arg4 ~= nil then
+		str ..= " | " .. snpEncodeLogData(arg4)
+	end
+
+	if not writefile then
+		return
+	end
+	table.insert(autofarmLogLines, str)
+	autofarmLogPending = (autofarmLogPending or 0) + 1
+
+	if arg == "WARN" or arg == "ERROR" or arg == "FATAL" then
+		flushAutofarmLog()
+	elseif autofarmLogPending >= 8 then
+		flushAutofarmLog()
+	elseif not autofarmLogFlushQueued then
+		autofarmLogFlushQueued = true
+
+		task.defer(function()
+			autofarmLogFlushQueued = false
+
+			if autofarmLogPending and autofarmLogPending > 0 then
+				flushAutofarmLog()
+			end
+		end)
+	end
+end
+
+fullbag = false
+roundend = false
+startround = false
+status1 = "Idle"
+autofarmCachedRoundData = nil
+autofarmBurstShooting = false
+autofarmMurderDeadNotified = false
+autofarmHadAliveMurderer = false
+autofarmMurderRoundStopped = false
+autofarmRoundVictoryStopped = false
+autofarmMapSpawnStickyToken = 0
+autofarmKillAllBusy = false
+autofarmLastCoinPos = nil
+autofarmActiveTween = nil
+
+autofarmEyeArgBrief = function(arg)
+	local kind = typeof(arg)
+	if kind == "nil" then
+		return nil
+	end
+
+	if kind == "string" or kind == "number" or kind == "boolean" then
+		return arg
+	end
+
+	if kind == "Instance" then
+		local ok, result = pcall(function()
+			return arg:GetFullName()
+		end)
+
+		return ok and result or tostring(arg)
+	end
+
+	if kind == "Vector3" then
+		return string.format("%.1f,%.1f,%.1f", arg.X, arg.Y, arg.Z)
+	end
+
+	if kind == "CFrame" then
+		local position = arg.Position
+		return string.format("CF(%.1f,%.1f,%.1f)", position.X, position.Y, position.Z)
+	end
+
+	if kind == "table" then
+		local n = 0
+
+		for k in pairs(arg) do
+			n += 1
+			if not (n > 24) then
+				continue
+			end
+			break
+		end
+
+		return string.format("{table:%d}", n)
+	end
+
+	return tostring(kind)
+end
+
+autofarmEyeRoundTimer = function()
+	local roundTimerPart = workspace:FindFirstChild("RoundTimerPart")
+	if not roundTimerPart then
+		return nil
+	end
+
+	local ok, result = pcall(function()
+		return roundTimerPart:GetAttribute("Time")
+	end)
+
+	if ok then
+		return result
+	end
+	return nil
+end
+
+autofarmEyeFindMap = function()
+	for _, child in ipairs(workspace:GetChildren()) do
+		if child:IsA("Model") and child:FindFirstChild("CoinContainer") then
+			return child.Name
+		end
+	end
+
+	return nil
+end
+
+autofarmEyeMurderBrief = function(arg)
+	local v_2 = arg or autofarmCachedRoundData
+	local name = nil
+
+	if type(findMurder) == "function" then
+		local ok, result = pcall(findMurder)
+		ok = ok and result
+		name = nil
+
+		if ok then
+			name = result.Name
+		end
+	end
+
+	local flag = nil
+	local v_3 = nil
+
+	if type(v_2) == "table" then
+		v_3 = nil
+		flag = nil
+
+		for k, v_4 in pairs(v_2) do
+			if type(v_4) == "table" and v_4.Role == "Murderer" then
+				flag = v_4.Dead == true
+
+				if flag then
+					v_3 = k
+				else
+					flag = v_4.Killed == true
+					v_3 = k
+				end
+
+				break
+			else
+				v_3 = nil
+				flag = nil
+			end
+		end
+	end
+
+	return {
+		knifeMurder = name,
+		pdMurder = v_3,
+		pdMurderDead = flag,
+		murderEliminated = autofarmIsMurdererEliminated and autofarmIsMurdererEliminated(v_2) or nil,
+	}
+end
+
+autofarmEyeRolesBrief = function(arg)
+	if type(arg) ~= "table" then
+		return nil
+	end
+	local tbl2 = {}
+	local flag = arg[localPlayer.Name] == nil
+	local n = 0
+	local n2 = 0
+
+	for k, v_2 in pairs(arg) do
+		if type(v_2) == "table" then
+			local str = tostring(v_2.Role or "?")
+			local flag2 = v_2.Dead == true or v_2.Killed == true
+
+			if flag2 then
+				n += 1
+			else
+				n2 += 1
+			end
+
+			if #tbl2 < 16 then
+				tbl2[#tbl2 + 1] = string.format("%s:%s%s%s", tostring(k), str, flag2 and ":DEAD" or "", v_2.Killed == true and "+K" or "")
+			end
+		end
+	end
+
+	return { alive = n2, dead = n, missingLocal = flag, roles = table.concat(tbl2, ",") }
+end
+
+autofarmLocalRuntimeSnap = function()
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
+	local v_2 = autofarmCachedRoundData and autofarmCachedRoundData[localPlayer.Name]
+	local result = nil
+
+	if humanoid then
+		local ok
+
+		ok, result = pcall(function()
+			return tostring(humanoid:GetState())
+		end)
+
+		result = ok and result or "err"
+	end
+
+	local count = nil
+
+	pcall(function()
+		if type(gcinfo) == "function" then
+			count = gcinfo()
+		elseif type(collectgarbage) == "function" then
+			count = collectgarbage("count")
+		end
+	end)
+
+	local ping = nil
+
+	pcall(function()
+		local Stats2 = game:GetService("Stats")
+		Stats2 = Stats2 and Stats2.Network
+		Stats2 = Stats2 and Stats2.ServerStatsItem
+		Stats2 = Stats2 and Stats2["Data Ping"]
+
+		if Stats2 and Stats2.GetValue then
+			ping = Stats2:GetValue()
+		end
+	end)
+
+	local v_3 = nil
+
+	pcall(function()
+		if identifyexecutor then
+			v_3 = identifyexecutor()
+		end
+	end)
+
+	local n = 0
+	local n2 = 0
+
+	if character then
+		pcall(function()
+			for _, descendant in ipairs(character:GetDescendants()) do
+				if descendant:IsA("BasePart") then
+					if descendant.CanCollide then
+						n += 1
+					else
+						n2 += 1
+					end
+				end
+			end
+		end)
+	end
+
+	local str = nil
+	local y = nil
+
+	if humanoidRootPart then
+		y = humanoidRootPart.Position.Y
+
+		pcall(function()
+			local assemblyLinearVelocity = humanoidRootPart.AssemblyLinearVelocity
+			str = string.format("%.1f,%.1f,%.1f", assemblyLinearVelocity.X, assemblyLinearVelocity.Y, assemblyLinearVelocity.Z)
+		end)
+	end
+
+	local v_4 = autofarmEyeMapName or autofarmEyeFindMap()
+	autofarmEyeMapName = v_4
+	local v_5 = autofarmEyeMurderBrief()
+
+	local tbl2 = {
+		canCollect = autofarmLocalCanCollectCoins and autofarmLocalCanCollectCoins() or nil,
+		hasChar = character ~= nil,
+		hasHum = humanoid ~= nil,
+		hasHrp = humanoidRootPart ~= nil,
+		health = humanoid and humanoid.Health or nil,
+		maxHealth = humanoid and humanoid.MaxHealth or nil,
+		humState = result,
+		platformStand = humanoid and humanoid.PlatformStand or nil,
+		sit = humanoid and humanoid.Sit or nil,
+		hrpPos = humanoidRootPart and string.format("%.1f,%.1f,%.1f", humanoidRootPart.Position.X, humanoidRootPart.Position.Y, humanoidRootPart.Position.Z) or nil,
+		hrpY = y,
+		hrpVel = str,
+		voidRisk = y ~= nil and y < -100 or false,
+		hasFlyBV = humanoidRootPart and humanoidRootPart:FindFirstChild("FLY_NIGGER") ~= nil or false,
+		activeTween = autofarmActiveTween ~= nil,
+		landBusy = autofarmLandBusy == true,
+		collideOn = n,
+		collideOff = n2,
+		mapName = v_4,
+		roundTimer = autofarmEyeRoundTimer(),
+		knifeMurder = v_5.knifeMurder,
+		pdMurder = v_5.pdMurder,
+		pdMurderDead = v_5.pdMurderDead,
+		lastCoinPos = autofarmLastCoinPos and string.format("%.1f,%.1f,%.1f", autofarmLastCoinPos.X, autofarmLastCoinPos.Y, autofarmLastCoinPos.Z) or nil,
+	}
+
+	local function fn2()
+		local v_6 = autofarmCachedRoundData
+		if type(v_6) ~= "table" then
+			return nil
+		end
+		return v_6[localPlayer.Name] ~= nil
+	end
+
+	tbl2.pdInRound = fn2()
+	tbl2.pdDead = v_2 and v_2.Dead or nil
+	tbl2.pdKilled = v_2 and v_2.Killed or nil
+	tbl2.pdRole = v_2 and v_2.Role or nil
+	tbl2.memKb = count
+	tbl2.ping = ping
+	tbl2.executor = v_3
+	tbl2.status1 = status1
+	tbl2.loopTick = autofarmLoopTick
+	tbl2.coinsTouchedSession = autofarmCoinCollectCount
+	return tbl2
+end
+
+autofarmSnap = function(arg)
+	local tbl2
+
+	if AUTOFARM_TRACE_MAX then
+		tbl2 = hubAutofarmRejoinState()
+		tbl2.roundend = roundend
+		tbl2.startround = startround
+		tbl2.fullbag = fullbag
+		tbl2.bag = values.bag
+		local v_2 = autofarmLocalRuntimeSnap()
+
+		for k, v_3 in pairs(v_2) do
+			tbl2[k] = v_3
+		end
+	else
+		tbl2 = {
+			roundend = roundend,
+			startround = startround,
+			fullbag = fullbag,
+			bag = values.bag,
+			farmType = dropdownval and dropdownval.farmType or nil,
+			coinPickMode = dropdownval and dropdownval.coinPickMode or nil,
+			selectAfterFarm = dropdownval and dropdownval.selectAfterFarm or nil,
+			runnings = values.runnings == true,
+			resetmurderer = values.resetmurderer == true,
+			status1 = status1,
+			loopTick = autofarmLoopTick,
+			coinsTouchedSession = autofarmCoinCollectCount,
+		}
+	end
+
+	if type(arg) == "table" then
+		for k, v_2 in pairs(arg) do
+			tbl2[k] = v_2
+		end
+	end
+
+	return tbl2
+end
+
+autofarmHookCharacterEye = function(arg)
+	if not arg then
+		return
+	end
+	local humanoid = arg:FindFirstChildOfClass("Humanoid") or arg:WaitForChild("Humanoid", 8)
+	local humanoidRootPart = arg:FindFirstChild("HumanoidRootPart") or arg:WaitForChild("HumanoidRootPart", 8)
+
+	if humanoid then
+		pcall(function()
+			humanoid.Died:Connect(function()
+				autofarmDbg("WARN", "char", "Humanoid.Died", autofarmSnap())
+				flushAutofarmLog()
+			end)
+		end)
+
+		pcall(function()
+			humanoid.StateChanged:Connect(function(old, new)
+				local str = tostring(new)
+				local flag = new == Enum.HumanoidStateType.Freefall or new == Enum.HumanoidStateType.FallingDown or new == Enum.HumanoidStateType.Dead or new == Enum.HumanoidStateType.Landed or new == Enum.HumanoidStateType.Physics or new == Enum.HumanoidStateType.Flying
+				if not AUTOFARM_TRACE_MAX then
+					return
+				end
+
+				if not values.runnings and not flag then
+					return
+				end
+				autofarmDbg(flag and "WARN" or "TRACE", "char", "Humanoid.StateChanged → " .. str, autofarmSnap({ newState = str }))
+
+				if flag then
+					flushAutofarmLog()
+				end
+			end)
+		end)
+
+		pcall(function()
+			local n = -1
+
+			humanoid.HealthChanged:Connect(function(health)
+				if not AUTOFARM_TRACE_MAX or not values.runnings then
+					return
+				end
+
+				if math.abs(health - n) < 1 and health > 0 then
+					return
+				end
+				n = health
+				autofarmDbg("TRACE", "char", "HealthChanged", autofarmSnap({ healthNow = health }))
+			end)
+		end)
+	end
+
+	if humanoidRootPart then
+		pcall(function()
+			humanoidRootPart.AncestryChanged:Connect(function(child, parent)
+				if parent == nil then
+					autofarmDbg("WARN", "char", "HRP.AncestryChanged → nil", autofarmSnap())
+					flushAutofarmLog()
+				end
+			end)
+		end)
+	end
+end
+
+autofarmInstallTraceHooks = function()
+	if autofarmTraceHooksInstalled then
+		return
+	end
+	autofarmTraceHooksInstalled = true
+
+	autofarmDbg("INFO", "trace", "installing third-eye hooks", {
+		traceMax = AUTOFARM_TRACE_MAX,
+		heartbeatSec = 2,
+		voidY = -100,
+		hasAppendfile = type(appendfile) == "function",
+	})
+
+	pcall(function()
+		localPlayer.CharacterAdded:Connect(function(character)
+			autofarmDbg("INFO", "char", "CharacterAdded", autofarmSnap({ charName = character and character.Name }))
+			flushAutofarmLog()
+			autofarmHookCharacterEye(character)
+		end)
+	end)
+
+	if localPlayer.Character then
+		pcall(autofarmHookCharacterEye, localPlayer.Character)
+	end
+
+	pcall(function()
+		localPlayer.CharacterRemoving:Connect(function(character)
+			autofarmDbg("WARN", "char", "CharacterRemoving", autofarmSnap({ charName = character and character.Name }))
+			flushAutofarmLog()
+		end)
+	end)
+
+	pcall(function()
+		local GuiService = game:GetService("GuiService")
+
+		GuiService:GetPropertyChangedSignal("ErrorMessage"):Connect(function()
+			local errorMessage = GuiService.ErrorMessage
+
+			if errorMessage and tostring(errorMessage) ~= "" then
+				autofarmDbg("FATAL", "kick", "GuiService.ErrorMessage", autofarmSnap({ errorMessage = tostring(errorMessage) }))
+				flushAutofarmLog()
+			end
+		end)
+	end)
+
+	pcall(function()
+		game:BindToClose(function()
+			autofarmDbg("FATAL", "session", "BindToClose", autofarmSnap())
+			flushAutofarmLog()
+		end)
+	end)
+
+	pcall(function()
+		local function fn2(arg, arg2)
+			if not arg2 then
+				return
+			end
+
+			arg2.ChildAdded:Connect(function(child)
+				if not AUTOFARM_TRACE_MAX then
+					return
+				end
+
+				if child.Name ~= "Coin_Server" then
+					return
+				end
+
+				if not values.runnings and not startround then
+					return
+				end
+				autofarmDbg("EVENT", "map", "CoinContainer.ChildAdded", autofarmSnap({ map = arg and arg.Name, coin = autofarmCoinBrief and autofarmCoinBrief(child) or child.Name }))
+			end)
+
+			arg2.ChildRemoved:Connect(function(child)
+				if not AUTOFARM_TRACE_MAX then
+					return
+				end
+
+				if child.Name ~= "Coin_Server" then
+					return
+				end
+
+				if not values.runnings and not startround then
+					return
+				end
+				autofarmDbg("EVENT", "map", "CoinContainer.ChildRemoved", autofarmSnap({ map = arg and arg.Name, coinName = child.Name, activeTween = autofarmActiveTween ~= nil }))
+			end)
+		end
+
+		local function fn3(arg)
+			if not arg or not arg:IsA("Model") then
+				return
+			end
+			local coinContainer = arg:FindFirstChild("CoinContainer")
+			if not coinContainer then
+				return
+			end
+			autofarmEyeMapName = arg.Name
+			autofarmDbg("EVENT", "map", "map with CoinContainer present", autofarmSnap({ map = arg.Name }))
+			fn2(arg, coinContainer)
+
+			arg.AncestryChanged:Connect(function(child, parent)
+				if parent == nil then
+					autofarmDbg("WARN", "map", "map destroyed / unloaded", autofarmSnap({ map = arg.Name }))
+					flushAutofarmLog()
+
+					if autofarmEyeMapName == arg.Name then
+						autofarmEyeMapName = nil
+					end
+				end
+			end)
+		end
+
+		for _, child in ipairs(workspace:GetChildren()) do
+			pcall(fn3, child)
+		end
+
+		workspace.ChildAdded:Connect(function(child)
+			task.defer(function()
+				pcall(fn3, child)
+			end)
+		end)
+
+		workspace.ChildRemoved:Connect(function(child)
+			if child:IsA("Model") and autofarmEyeMapName == child.Name then
+				autofarmDbg("WARN", "map", "workspace ChildRemoved map", autofarmSnap({ map = child.Name, activeTween = autofarmActiveTween ~= nil }))
+				flushAutofarmLog()
+				autofarmEyeMapName = nil
+			end
+		end)
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(2)
+
+			if AUTOFARM_TRACE_MAX then
+				if values.runnings then
+					local v_2 = autofarmSnap({
+						heartbeatDt = os.clock() - (autofarmLastHeartbeatLog or 0),
+						scan = autofarmScanCoinContainers and autofarmScanCoinContainers() or nil,
+					})
+
+					local voidRisk = v_2.voidRisk or v_2.humState == "Enum.HumanoidStateType.Freefall"
+					local str = "TRACE"
+
+					if voidRisk then
+						str = "WARN"
+					end
+
+					autofarmDbg(str, "heartbeat", "alive tick", v_2)
+					autofarmLastHeartbeatLog = os.clock()
+					flushAutofarmLog()
+				end
+			end
+		end
+	end)
+end
+
+autofarmInstallGameplayEye = function()
+	if autofarmGameplayEyeInstalled then
+		return
+	end
+	autofarmGameplayEyeInstalled = true
+
+	local tbl2 = {
+		KillEvent = true,
+		GunKill = true,
+		KnifeKill = true,
+		EliminatePlayer = true,
+		GiveWeapon = true,
+		TeleportToPart = true,
+		SpecialRound = true,
+		ShowRoleSelect = true,
+		ShowRoleSelectNew = true,
+		RoleSelect = true,
+		FakeGun = true,
+		Stealth = true,
+		SpecialXPEvent = true,
+		ShowTeammates = true,
+		ChangeTarget = true,
+		ActivatePerk = true,
+	}
+
+	local tbl3 = {
+		PlayerDataChanged = true,
+		CoinCollected = true,
+		CoinsStarted = true,
+		RoundEndFade = true,
+		RoundStart = true,
+		LoadingMap = true,
+		Fade = true,
+		VictoryScreen = true,
+		GameOver = true,
+	}
+
+	pcall(function()
+		local gameplay = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Gameplay", 30)
+		if not gameplay then
+			autofarmDbg("WARN", "eye", "Gameplay folder missing", {})
+			return
+		end
+		local n = 0
+
+		for _, child in ipairs(gameplay:GetChildren()) do
+			if child:IsA("RemoteEvent") then
+				if not tbl3[child.Name] then
+					n += 1
+
+					child.OnClientEvent:Connect(function(...)
+						if not AUTOFARM_TRACE_MAX then
+							return
+						end
+						local name = child.Name
+						if not values.runnings and not tbl2[name] then
+							return
+						end
+						local tbl4 = { ... }
+						local tbl5 = { remote = name, nArgs = #tbl4 }
+
+						for i = 1, math.min(#tbl4, 6) do
+							tbl5["a" .. i] = autofarmEyeArgBrief(tbl4[i])
+						end
+
+						if name == "TeleportToPart" then
+							autofarmDbg("WARN", "gameplay", name, autofarmSnap(tbl5))
+							flushAutofarmLog()
+							return
+						end
+
+						local flag = name == "KillEvent" or name == "GunKill" or name == "KnifeKill" or name == "EliminatePlayer"
+						local str = "EVENT"
+
+						if flag then
+							str = "WARN"
+						end
+
+						autofarmDbg(str, "gameplay", name, autofarmSnap(tbl5))
+
+						if str == "WARN" then
+							flushAutofarmLog()
+						end
+					end)
+				end
+			end
+		end
+
+		autofarmDbg("INFO", "eye", "Gameplay remotes hooked", { hooked = n })
+	end)
+
+	pcall(function()
+		if ClientTweenEvents and ClientTweenEvents.OnClientEvent then
+			ClientTweenEvents.OnClientEvent:Connect(function(...)
+				if not AUTOFARM_TRACE_MAX then
+					return
+				end
+
+				if not values.runnings and not startround then
+					return
+				end
+				autofarmDbg("EVENT", "tween", "ClearTweens", autofarmSnap({ nArgs = select("#", ...) }))
+			end)
+		end
+	end)
+end
+
+do
+	local v_2 = queue_on_teleport
+	local queueOnTeleport
+
+	if v_2 then
+		queueOnTeleport = v_2
+	else
+		queueOnTeleport = syn and syn.queue_on_teleport
+	end
+
+	local queueOnTeleport2
+
+	if queueOnTeleport then
+		queueOnTeleport2 = queueOnTeleport
+	else
+		queueOnTeleport2 = fluxus and fluxus.queue_on_teleport
+	end
+
+	hubQueueTeleport = queueOnTeleport2
+end
+
+hubRejoinTeleporting = false
+hubRejoinRetryCount = 0
+hubRejoinPendingQueueCode = nil
+HUB_REJOIN_MAX_RETRIES = 5
+
+hubRejoinDbg = function(arg, arg2, arg3, arg4)
+	local tbl2 = {
+		step = arg2,
+		rejoinOnKick = values.rejoinOnKick,
+		hubRejoinTeleporting = hubRejoinTeleporting,
+		hubRejoinRetryCount = hubRejoinRetryCount,
+		queueTeleportAvailable = hubQueueTeleport ~= nil,
+		hubValid = hubResolveHubValid(),
+		loaderUrl = hubHubLoaderUrl(),
+		placeId = game.PlaceId,
+		jobId = game.JobId,
+	}
+
+	if dropdownval then
+		tbl2.autostartConfig = dropdownval.autostartConfig
+		tbl2.autostartEnabled = values.autostartConfig
+	end
+
+	if selectedHubConfig ~= nil then
+		tbl2.selectedHubConfig = selectedHubConfig
+	end
+
+	if type(arg4) == "table" then
+		for k, v_2 in pairs(arg4) do
+			tbl2[k] = v_2
+		end
+	end
+
+	autofarmDbg(arg, "rejoin", arg3, tbl2)
+end
+
+HUB_AUTOFARM_REJOIN = {
+	toggles = {
+		"runnings",
+		"resetmurderer",
+		"disable3dRender",
+		"prestige",
+		"autoOpenCrate",
+		"rejoinOnKick",
+		"hopWhenEmpty",
+		"discordNotifyKick",
+		"discordNotifyFarmOn",
+		"discordNotifyFarmOff",
+		"discordNotifyFullBag",
+		"discordNotifyRoundStart",
+		"discordNotifyRoundEnd",
+		"discordNotifyMurderDead",
+		"discordNotifyAccountCoins",
+		"discordNotifyAccountXP",
+	},
+	dropdowns = { "farmType", "coinPickMode", "selectAfterFarm", "selectCrate", "discordWebhookSaved" },
+	sliders = { "farmSpeed", "farmLift" },
+	strings = { "discordWebhook", "discordWebhookName" },
+}
+
+hubAutofarmRejoinState = function()
+	local tbl2 = {}
+
+	for _, toggle in ipairs(HUB_AUTOFARM_REJOIN.toggles) do
+		if values[toggle] ~= nil then
+			tbl2[toggle] = values[toggle]
+		end
+	end
+
+	for _, dropdown in ipairs(HUB_AUTOFARM_REJOIN.dropdowns) do
+		tbl2[dropdown] = dropdownval[dropdown]
+	end
+
+	for _, slider in ipairs(HUB_AUTOFARM_REJOIN.sliders) do
+		if valueslider[slider] ~= nil then
+			tbl2[slider] = valueslider[slider]
+		end
+	end
+
+	for _, string_ in ipairs(HUB_AUTOFARM_REJOIN.strings) do
+		tbl2[string_] = valuestrings[string_]
+	end
+
+	if type(discordWebhookGetActiveUrl) == "function" then
+		tbl2.discordWebhookActiveUrl = discordWebhookGetActiveUrl()
+	end
+
+	return tbl2
+end
+
+hubResolveHubValid = function()
+	local valid = getgenv().valid
+	if valid == "vps" or valid == "github" then
+		return valid
+	end
+
+	if getgenv().readySNPWARE then
+		return "vps"
+	end
+	return nil
+end
+
+hubHubLoaderUrl = function()
+	local v_2 = hubResolveHubValid()
+	if v_2 == "vps" then
+		return "https://api.snpware.xyz/auth"
+	end
+
+	if v_2 == "github" then
+		return "https://raw.githubusercontent.com/thunderXhub/ThunderXHUB/refs/heads/main/loader"
+	end
+	return nil
+end
+
+hubReadLoaderLanguagePrefs = function()
+	local str, flag, str2
+
+	if readfile and isfile and isfile("configlanguage.json") then
+		local ok, result = pcall(function()
+			return HttpService:JSONDecode(readfile("configlanguage.json"))
+		end)
+
+		ok = ok and type(result) == "table"
+		str = "en"
+		flag = false
+		str2 = "slider"
+
+		if ok then
+			if type(result.language) == "string" then
+				str = hubLanguageCode(result.language)
+			end
+
+			if result.valueControl == "inputbox" or result.valueControl == "slider" then
+				str2 = result.valueControl
+			end
+
+			flag = result.choice == true
+		end
+	else
+		str = "en"
+		flag = false
+		str2 = "slider"
+
+		if dropdownval then
+			local v_2 = hubLanguageCode(dropdownval.language)
+			local valueControl = dropdownval.valueControl
+
+			if valueControl then
+				valueControl = tostring(dropdownval.valueControl):lower():find("input")
+			end
+
+			local flag2 = false
+			local str3 = "slider"
+
+			if valueControl then
+				str = v_2
+				str2 = "inputbox"
+			else
+				str = v_2
+				flag = flag2
+				str2 = str3
+			end
+		end
+	end
+
+	return str, str2, flag
+end
+
+hubBuildRejoinQueueCode = function(arg, arg2, arg3, arg4, arg5, arg6, arg7)
+	local random = math.random
+
+	return string.format([[spawn(function()
+    repeat task.wait() until game:IsLoaded()
+    -- Dedup: hub queues once before Teleport and again on OnTeleport; Xeno may run both.
+    local bootId = %q
+    if getgenv()._SNP_REJOIN_BOOT == bootId then
+        return
+    end
+    getgenv()._SNP_REJOIN_BOOT = bootId
+    getgenv().valid = %q
+    getgenv().SNP_autostartConfigName = %q
+    getgenv().SNP_skipLoaderGui = %s
+    getgenv().readySNPWARE = nil
+    getgenv().r3thexecuted = nil
+    getgenv().choice = %q
+    getgenv().valuecontrol1 = %q
+    do
+        local ok, decoded = pcall(function()
+            return game:GetService("HttpService"):JSONDecode(%q)
+        end)
+        if ok and type(decoded) == "table" then
+            getgenv().SNP_rejoinPendingRestore = decoded
+        end
+    end
+    local success, err = pcall(function()
+        local code
+        if game.HttpGetAsync then
+            code = game:HttpGetAsync(%q)
+        else
+            code = game:HttpGet(%q)
+        end
+        if type(code) ~= "string" or code == "" then
+            error("empty loader response")
+        end
+        local func, compileErr = loadstring(code)
+        if not func then
+            error("compile: " .. tostring(compileErr))
+        end
+        func()
+    end)
+    if not success then
+        if getgenv()._SNP_REJOIN_BOOT == bootId then
+            getgenv()._SNP_REJOIN_BOOT = nil
+        end
+        warn("[SNP] rejoin loader failed:", err)
+    end
+end)
+]], string.format("%s-%d", tostring(os.clock()), random(100000, 999999)), tostring(arg4 or ""), tostring(arg3 or ""), arg5 and "true" or "false", tostring(arg6 or "en"), tostring(arg7 or "slider"), arg2, arg, arg)
+end
+
+hubQueueKickRejoinScript = function(arg)
+	if not hubQueueTeleport then
+		hubRejoinDbg("ERROR", "queue", "queue_on_teleport unavailable")
+		return false, "queue_on_teleport unavailable"
+	end
+	local ok, result = pcall(hubQueueTeleport, arg)
+	if not ok then
+		hubRejoinDbg("ERROR", "queue", "queue_on_teleport pcall failed", { err = tostring(result) })
+		return false, tostring(result)
+	end
+	hubRejoinDbg("INFO", "queue", "queue_on_teleport ok")
+	return true
+end
+
+hubCallKickRejoinTeleport = function()
+	hubRejoinDbg("INFO", "teleport", "Teleport(game.PlaceId) calling", { placeId = game.PlaceId })
+
+	local ok, result = pcall(function()
+		game:GetService("TeleportService"):Teleport(game.PlaceId)
+	end)
+
+	if not ok then
+		hubRejoinDbg("ERROR", "teleport", "Teleport pcall failed", { err = tostring(result) })
+		hubRejoinTeleporting = false
+		return false, tostring(result)
+	end
+
+	hubRejoinDbg("INFO", "teleport", "Teleport called")
+	return true
+end
+
+hubRetryKickRejoin = function(arg, result)
+	if not values.rejoinOnKick or not hubRejoinPendingQueueCode then
+		hubRejoinDbg("DEBUG", "retry_skip", "retry skipped", { reason = arg, hasQueueCode = hubRejoinPendingQueueCode ~= nil })
+		return
+	end
+
+	if hubRejoinRetryCount >= HUB_REJOIN_MAX_RETRIES then
+		local v_2 = hubRejoinDbg
+		local tbl2 = { reason = arg }
+		result = result and tostring(result) or nil
+		tbl2.result = result
+		v_2("ERROR", "retry_exhausted", "max retries reached", tbl2)
+		return
+	end
+
+	hubRejoinRetryCount = hubRejoinRetryCount + 1
+	local n = result == Enum.TeleportResult.Flooded and 10 or 5
+	hubRejoinDbg("WARN", "retry_scheduled", "retry scheduled", { reason = arg, waitSec = n, attempt = hubRejoinRetryCount, result = result and tostring(result) or nil })
+
+	task.delay(n, function()
+		if not values.rejoinOnKick then
+			hubRejoinDbg("DEBUG", "retry_cancel", "toggle off before retry")
+			return
+		end
+
+		if hubRejoinTeleporting then
+			hubRejoinDbg("DEBUG", "retry_cancel", "already teleporting")
+			return
+		end
+		hubRejoinTeleporting = true
+		local v_2, v_3 = hubQueueKickRejoinScript(hubRejoinPendingQueueCode)
+
+		if not v_2 then
+			hubRejoinTeleporting = false
+			hubRejoinDbg("ERROR", "retry_queue_fail", tostring(v_3))
+			return
+		end
+
+		hubCallKickRejoinTeleport()
+	end)
+end
+
+hubPerformKickRejoin = function(arg)
+	hubRejoinDbg("INFO", "begin", "kick rejoin requested", { kickMessage = tostring(arg or "") })
+	if hubRejoinTeleporting then
+		hubRejoinDbg("WARN", "skip", "already teleporting")
+		return
+	end
+	local v_2 = hubHubLoaderUrl()
+	local v_3 = hubResolveHubValid()
+	if not v_2 then
+		hubRejoinDbg("ERROR", "abort", "unknown hub loader", { getgenvValid = getgenv().valid, resolvedValid = v_3, readySNPWARE = getgenv().readySNPWARE })
+		return
+	end
+	hubRejoinTeleporting = true
+	hubRejoinRetryCount = 0
+	local json = HttpService:JSONEncode(hubAutofarmRejoinState())
+	local str = hubResolveAutostartConfigName() or ""
+	local v_4, v_5, v_6 = hubReadLoaderLanguagePrefs()
+	local flag = not v_6
+	local v_7 = hubBuildRejoinQueueCode(v_2, json, str, v_3 or "", flag, v_4, v_5)
+	hubRejoinPendingQueueCode = v_7
+
+	hubRejoinDbg("INFO", "prepare", "queue payload built", {
+		loaderUrl = v_2,
+		resolvedValid = v_3,
+		autostartName = str,
+		loaderLang = v_4,
+		loaderValueControl = v_5,
+		rememberChoice = v_6,
+		skipLoaderGui = flag,
+		rejoinState = hubAutofarmRejoinState(),
+		queueCodeLen = #v_7,
+	})
+
+	if not hubQueueKickRejoinScript(v_7) then
+		hubRejoinTeleporting = false
+		hubRejoinPendingQueueCode = nil
+		return
+	end
+
+	local flag2 = false
+	local connection = nil
+
+	connection = localPlayer.OnTeleport:Connect(function(arg2)
+		hubRejoinDbg("INFO", "OnTeleport", "OnTeleport fired", { state = tostring(arg2) })
+		if flag2 then
+			return
+		end
+		flag2 = true
+
+		if connection then
+			connection:Disconnect()
+		end
+
+		hubQueueKickRejoinScript(v_7)
+	end)
+
+	task.spawn(hubCallKickRejoinTeleport)
+end
+
+HUB_HOP_MIN_PLAYERS = 2
+HUB_HOP_ALONE_SECONDS = 25
+HUB_HOP_COOLDOWN = 90
+hubHopLastAttempt = -math.huge
+
+hubFetchHopCandidates = function()
+	local request_ = syn and syn.request or http and http.request or http_request or request
+	if type(request_) ~= "function" then
+		return nil, "no http request function"
+	end
+
+	local ok, result = pcall(request_, {
+		Url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100&excludeFullGames=true", game.PlaceId),
+		Method = "GET",
+	})
+
+	if not ok or type(result) ~= "table" then
+		return nil, "request failed: " .. tostring(result)
+	end
+
+	if tonumber(result.StatusCode) ~= 200 then
+		return nil, "http " .. tostring(result.StatusCode)
+	end
+
+	local ok2, result2 = pcall(function()
+		return HttpService:JSONDecode(result.Body)
+	end)
+
+	if not ok2 or type(result2) ~= "table" or type(result2.data) ~= "table" then
+		return nil, "decode failed"
+	end
+	local tbl2 = {}
+
+	for _, v_2 in ipairs(result2.data) do
+		local num = tonumber(v_2.playing)
+		local num2 = tonumber(v_2.maxPlayers)
+
+		if type(v_2.id) == "string" and v_2.id ~= game.JobId and num and num2 and num < num2 and num >= HUB_HOP_MIN_PLAYERS then
+			table.insert(tbl2, { id = v_2.id, playing = num, ping = tonumber(v_2.ping) or math.huge })
+		end
+	end
+
+	table.sort(tbl2, function(arg, arg2)
+		if arg.ping ~= arg2.ping then
+			return arg.ping < arg2.ping
+		end
+		return arg.playing > arg2.playing
+	end)
+
+	return tbl2
+end
+
+hubServerHopTo = function(arg, arg2)
+	if hubRejoinTeleporting then
+		return false, "already teleporting"
+	end
+	local v_2 = hubHubLoaderUrl()
+	if not v_2 then
+		hubRejoinDbg("ERROR", "hop", "unknown hub loader, hop aborted", { reason = arg2 })
+		return false, "unknown loader"
+	end
+
+	if not hubQueueTeleport then
+		hubRejoinDbg("ERROR", "hop", "queue_on_teleport unavailable, hop aborted", { reason = arg2 })
+		return false, "queue_on_teleport unavailable"
+	end
+	hubRejoinTeleporting = true
+	local json = HttpService:JSONEncode(hubAutofarmRejoinState())
+	local str = hubResolveAutostartConfigName() or ""
+	local v_3, v_4, v_5 = hubReadLoaderLanguagePrefs()
+	local v_6 = hubBuildRejoinQueueCode(v_2, json, str, hubResolveHubValid() or "", not v_5, v_3, v_4)
+	local v_7, v_8 = hubQueueKickRejoinScript(v_6)
+	if not v_7 then
+		hubRejoinTeleporting = false
+		return false, tostring(v_8)
+	end
+	local flag = false
+	local connection = nil
+
+	connection = localPlayer.OnTeleport:Connect(function(arg3)
+		hubRejoinDbg("INFO", "hop", "OnTeleport fired", { state = tostring(arg3) })
+		if flag then
+			return
+		end
+		flag = true
+
+		if connection then
+			connection:Disconnect()
+		end
+
+		hubQueueKickRejoinScript(v_6)
+	end)
+
+	hubRejoinDbg("INFO", "hop", "teleporting to instance", { reason = arg2, jobId = tostring(arg), queueCodeLen = #v_6 })
+
+	task.spawn(function()
+		local ok, result = pcall(function()
+			local TeleportService = game:GetService("TeleportService")
+
+			if arg then
+				TeleportService:TeleportToPlaceInstance(game.PlaceId, arg, localPlayer)
+			else
+				TeleportService:Teleport(game.PlaceId)
+			end
+		end)
+
+		if not ok then
+			hubRejoinTeleporting = false
+
+			if connection then
+				pcall(function()
+					connection:Disconnect()
+				end)
+			end
+
+			hubRejoinDbg("ERROR", "hop", "teleport pcall failed", { err = tostring(result) })
+		end
+	end)
+
+	return true
+end
+
+hubHopFromEmptyServer = function()
+	local count, v_2 = hubFetchHopCandidates()
+
+	if not count or #count == 0 then
+		local v_3 = hubRejoinDbg
+		local tbl2 = { err = v_2 }
+		count = count and #count or 0
+		tbl2.count = count
+		v_3("WARN", "hop", "no candidate servers, falling back to matchmaking", tbl2)
+		return hubServerHopTo(nil, "empty server (fallback)")
+	end
+
+	local v_3 = count[1]
+
+	hubRejoinDbg("INFO", "hop", "candidate chosen", {
+		jobId = v_3.id,
+		ping = v_3.ping ~= math.huge and v_3.ping or nil,
+		playing = v_3.playing,
+		candidates = #count,
+	})
+
+	return hubServerHopTo(v_3.id, "empty server")
+end
+
+hubHandleKickErrorMessage = function(arg, arg2)
+	local GuiService = game:GetService("GuiService")
+	local errorMessage
+
+	if not arg or tostring(arg) == "" then
+		errorMessage = GuiService.ErrorMessage
+	else
+		errorMessage = arg
+	end
+
+	if not errorMessage or tostring(errorMessage) == "" then
+		hubRejoinDbg("DEBUG", "kick_signal", "empty message ignored", { source = arg2, signalMessage = arg, errorMessageProp = GuiService.ErrorMessage })
+		return
+	end
+	hubRejoinDbg("INFO", "kick_signal", "kick/error detected", { source = arg2, message = tostring(errorMessage), runnings = values.runnings })
+
+	if values.runnings then
+		discordNotify("discordNotifyKick", {
+			title = "Kicked / Error",
+			description = tostring(errorMessage),
+			color = 16711680,
+			mentionEveryone = true,
+		})
+
+		hubRejoinDbg("INFO", "discord", "kick webhook sent")
+	end
+
+	if values.rejoinOnKick then
+		hubPerformKickRejoin(errorMessage)
+	else
+		hubRejoinDbg("DEBUG", "kick_signal", "rejoin skipped — toggle off")
+	end
+end
+
+snpResetLogFile(AUTOFARM_LOG_FILE, "AUTOFARM")
+autofarmSessionT0 = os.clock()
+
+autofarmDbg("INFO", "boot", "Autofarm third-eye log initialized", {
+	logFile = AUTOFARM_LOG_FILE,
+	traceMax = AUTOFARM_TRACE_MAX,
+	heartbeatSec = 2,
+	voidY = -100,
+	maxBytes = 7340032,
+	maxMB = 7,
+	hasAppendfile = type(appendfile) == "function",
+	note = "Logs Gameplay remotes + map/coin/char physics for farm timelines",
+})
+
+hubPurgedInvalidConfigNames = hubConfigPurgeInvalidFiles()
+
+conns = {
+	antiflingPlayerAdded = nil,
+	antiflingPlayerRemoving = nil,
+	bangCharConnection = nil,
+	charcon1 = nil,
+	cn = nil,
+	connection = nil,
+	connectioncoins = nil,
+	deadConn = nil,
+	deadConn2 = nil,
+	egorRunConn = nil,
+	egorSpeedConn = nil,
+	gbCharConnection = nil,
+	gbTargetConnection = nil,
+	gsCharConnection = nil,
+	gundropcon = nil,
+	gunDropChildConn = nil,
+	gunDropDescendantConn = nil,
+	hcf = nil,
+	jerkConn = nil,
+	KnifeCharCon = nil,
+	knifeDodgeDescendantConn = nil,
+	knifeDodgeTagConn = nil,
+	knifeDodgeConns = {},
+	throwAuraDescendantConn = nil,
+	throwAuraConns = {},
+	mflyCharConn = nil,
+	mflyRenderConn = nil,
+	noclipConnection = nil,
+	hitboxPlayerAddedConn = nil,
+	hitboxLoopGen = 0,
+	autofarmCoinsWait = nil,
+	autofarmFloatSync = nil,
+	fakeknife = {},
+	customCursorConn = nil,
+	particleFallConn = nil,
+	mobileCursorConn = nil,
+	roundTimerObserverConn = nil,
+	roundTimerPartAddedConn = nil,
+	stretchBindName = "SNPWARE_Stretch",
+	coinDestroyContainerConn = nil,
+	coinDestroyTouches = {},
+	autotrapGunConn = nil,
+	trapEspConns = {},
+	clutchHandleDescConn = nil,
+	clutchFireflyDescConn = nil,
+	skyboxChildRemoved = nil,
+	skyboxChildAdded = nil,
+	skyboxMapGen = 0,
+	fakeDualKnifeCharConn = nil,
+	fakeDualKnifeChildConn = nil,
+	fakeDualKnifeBackpackConn = nil,
+	fakeDualKnifePacks = {},
+	espDrawingHeartbeat = nil,
+	nameEspHeartbeat = nil,
+	thrownKnifeEspRender = nil,
+	knifeAimRender = nil,
+	invisHeartbeat = nil,
+	invisRender = nil,
+	combatAimRender = nil,
+	testGuiRender = nil,
+}
+
+buttonParams = {}
+hubButtonControllers = {}
+hubButtonsScreenGui = nil
+hubButtonZIndex = 50
+
+values = {
+	alr = false,
+	NameEspInnocent = false,
+	NameEspSheriff = false,
+	NameEspMurderer = false,
+	NameEspHero = false,
+	NameEspDead = false,
+	autododge = false,
+	autoclutchbomb = false,
+	autoclutchfirefly = false,
+	autokill = false,
+	autokillsheriff = false,
+	autotrapgun = false,
+	antitrap = false,
+	autoExposeRoles = false,
+	autoGrabGun = false,
+	autoOpenCrate = false,
+	antiAfk = false,
+	antifling = true,
+	aimbotEnabled = false,
+	aimbotPrediction = false,
+	autostartConfig = false,
+	bag = false,
+	bangFollowing = false,
+	ChangeXray = false,
+	FakeKorblox = false,
+	FakeHeadless = false,
+	newItemPopup = true,
+	coinEsp = false,
+	customCursor = false,
+	readyforcursor = false,
+	customBackground = true,
+	customSkybox = false,
+	customGunSound = false,
+	destroyCoins = false,
+	disable3dRender = false,
+	egorenb = false,
+	enabledfakelag = false,
+	fakeKnife = false,
+	fakeDualKnife = false,
+	fakeDualKnifeDebug = false,
+	flyEnabled = false,
+	flySmoothAnim = false,
+	freezePlayer = false,
+	FOVEnabled = false,
+	gbRunning = false,
+	glitchEnabled = false,
+	gn = false,
+	grabber = false,
+	gunDropEsp = false,
+	gsRunning = false,
+	hideChat = false,
+	hideSnpwareChat = false,
+	chatShowInServerList = true,
+	Hitboxexpander = false,
+	infiniteJump = false,
+	invisActive = false,
+	autoNotifyScale = true,
+	instantRespawn = false,
+	jerkenabled = false,
+	KnifeAimEnabled = false,
+	KnifeShowFOV = false,
+	KnifeShowPrediction = false,
+	KnifeUseFOV = false,
+	lessLagOptim = false,
+	lower = false,
+	MuteRadiosEnabled = false,
+	murdnotify = false,
+	nb = false,
+	notm = false,
+	noclipEnabled = false,
+	prestige = false,
+	removeAccessories = false,
+	removeRaggy = false,
+	removeShadow = false,
+	resetmurderer = false,
+	discordNotifyKick = true,
+	discordNotifyFarmOn = true,
+	discordNotifyFarmOff = true,
+	discordNotifyFullBag = true,
+	discordNotifyRoundStart = true,
+	discordNotifyRoundEnd = true,
+	discordNotifyMurderDead = true,
+	discordNotifyAccountCoins = true,
+	discordNotifyAccountXP = true,
+	rotateCursor = false,
+	runnings = false,
+	rejoinOnKick = false,
+	hopWhenEmpty = false,
+	shernotify = false,
+	shoot = false,
+	shootOnlyKnifeOut = false,
+	silentAim = false,
+	silentAimhook = false,
+	silentAimStat = false,
+	spamjump = false,
+	spamEmotes = false,
+	spinningEnabled = false,
+	showtimer = false,
+	showpingfps = false,
+	loopStretch = false,
+	teleportEnabled = false,
+	thrownKnifeEsp = false,
+	throwingKnifeActive = false,
+	throwingKnifeWallCheck = true,
+	knifeAura = false,
+	knifeAuraWallCheck = true,
+	autoequipknife = false,
+	tpSafePartIfMurderNearest = false,
+	toggleGrabKey = false,
+	trapesp = false,
+	HitboxSize = Vector3.new(20, 20, 20),
+	HitboxDefaultSize = Vector3.new(2, 2, 1),
+	loopWalkSpeed = false,
+	loopJumpPower = false,
+	HighlightInnocent = false,
+	HighlightSheriff = false,
+	HighlightMurderer = false,
+	HighlightHero = false,
+	HighlightDead = false,
+	clutchbombkeybind = false,
+	kbNoclip = false,
+	kbSpeedGlitch = false,
+	kbSpin = false,
+	kbInvis = false,
+	kbFly = false,
+	kbFlyVertical = false,
+	kbSpamJump = false,
+	kbFreeze = false,
+	kbWalkSpeed = false,
+	kbJumpPower = false,
+	kbXray = false,
+	kbSpamEmotes = false,
+	hubButtonsLockPos = false,
+}
+
+valuecolors = {
+	espHighlightOutline = Color3.fromRGB(255, 255, 255),
+	espGunColor = Color3.fromRGB(255, 230, 0),
+	espTrapColor = Color3.fromRGB(138, 43, 226),
+	espCoinColor = Color3.fromRGB(255, 200, 0),
+	espThrownKnifeColor = Color3.fromRGB(255, 0, 0),
+}
+
+valueslider = {
+	acceleration = 0.3,
+	aimbotFOVRadius = 240,
+	anchoredDuration = 0.4,
+	backgroundTransparency = 6,
+	backgroundZoom = 100,
+	uiElementTransparency = 0,
+	BoxScale = 20,
+	ChamTransparency = 6,
+	espRefreshRate = 20,
+	farmLift = -4,
+	farmSpeed = 20,
+	FOV = 80,
+	glitchPower = 15,
+	gunSoundVolume = 5,
+	gunSoundPlaybackSpeed = 1,
+	hitboxSizeScalar = 20,
+	HitboxTransparency = 5,
+	interval = 0.07,
+	jerkUI = 4,
+	jumpPower = 50,
+	autododgeJumpPower = 19,
+	KnifeFOVSize = 90,
+	knifeAuraRange = 10,
+	murderSafeTpRange = 27,
+	newflySpeed = 50,
+	notifyScale = 1,
+	rotateSpeed = 2.3,
+	sendnotifyvolume = 2.1,
+	shootRadius = 14,
+	spinspeed = 20,
+	teleportDistance = 10,
+	throwingKnifeReach = 8,
+	TRANS = 5,
+	ud = 64,
+	walkSpeed = 16,
+	walkSpeedDefault = 16,
+	fpsCap = 240,
+	stretch = 0.65,
+	jumpPowerDefault = 50,
+	XrayTransparency = 0.9,
+	fireflywait = 3.1,
+	emoteSpamSpeed = 1,
+	newItemPopupAmount = 1,
+}
+
+valuestrings = { discordWebhook = "", discordWebhookName = "" }
+
+valuekeys = {
+	hubToggleKey = "G",
+	teleportGrabKey = "Y",
+	clutchBombKey = "X",
+	silentAimKey = "Q",
+	knifeAimKeybind = "R",
+	kbNoclipKey = "N",
+	kbSpeedGlitchKey = "V",
+	kbSpinKey = "C",
+	kbInvisKey = "M",
+	kbFlyKey = "F",
+	kbFlyUpKey = "Space",
+	kbFlyDownKey = "LeftControl",
+	kbSpamJumpKey = "J",
+	kbFreezeKey = "B",
+	kbWalkSpeedKey = "Z",
+	kbJumpPowerKey = "P",
+	kbXrayKey = "Y",
+	kbSpamEmotesKey = "U",
+}
+
+ValueControlList = { slider = "Slider", inputbox = "Input box" }
+
+hubSeasonalBackgroundDefault = function()
+	local ok, result = pcall(function()
+		return DateTime.now()
+	end)
+
+	ok = ok and result
+	local match = nil
+
+	if ok then
+		local ll = nil
+
+		pcall(function()
+			ll = result:FormatUniversalTime("LL", "en-us")
+		end)
+
+		match = nil
+
+		if type(ll) == "string" then
+			local tbl2 = {
+				January = 1,
+				February = 2,
+				March = 3,
+				April = 4,
+				May = 5,
+				June = 6,
+				July = 7,
+				August = 8,
+				September = 9,
+				October = 10,
+				November = 11,
+				December = 12,
+			}
+
+			match = ll:match("^(%a+)")
+			match = match and tbl2[match]
+		end
+
+		if not match then
+			local v_2 = result:ToUniversalTime()
+			match = type(v_2) == "table" and tonumber(v_2.Month) or nil
+		end
+	end
+
+	if not match then
+		match = os.date("!*t")
+		match = match and tonumber(match.month) or 9
+	end
+
+	if match == 12 or match == 1 or match == 2 then
+		return "Snowfall"
+	end
+
+	if match >= 3 and match <= 5 then
+		return "Spring Bloom"
+	end
+
+	if match >= 6 and match <= 8 then
+		return "Summer Glow"
+	end
+	return "Autumn Fall"
+end
+
+dropdownval = {
+	teleportGunMode = "Default",
+	shootMode = "Manual",
+	silentAimType = "Dynamic",
+	silentAimActions = { "Auto equip gun [Shoot Murderer button/keybind]" },
+	knifeTargetingMode = "Everyone",
+	farmType = "Floating",
+	coinPickMode = "Nearby",
+	selectAfterFarm = "Reset",
+	selectCrate = "MLG Box",
+	skybox = "Default MM2 Summer",
+	cursorStyle = "GreenCircle",
+	cursormobile = "GreenCircle",
+	gunSound = "Gingerscope",
+	language = "en",
+	theme = "Amber",
+	notifydesign = "New",
+	valueControl = ValueControlList.slider,
+	backgroundImage = hubSeasonalBackgroundDefault(),
+	skyboxMy = nil,
+	skyboxOwn = nil,
+	cursorMy = nil,
+	cursorOwn = nil,
+	cursorMyMobile = nil,
+	cursorOwnMobile = nil,
+	gunSoundMy = nil,
+	gunSoundOwn = nil,
+	backgroundMy = nil,
+	backgroundOwn = nil,
+	espGunDropMode = { "TextLabel" },
+	espPlayerNameMode = { "QuickAction" },
+	espModes = { "Highlight" },
+	autododgeMode = "Dodge",
+	discordWebhookSaved = nil,
+	autostartConfig = nil,
+	flingPicked = {},
+	killWhitelist = {},
+	ancientKnivesSpawn = {},
+	ancientGunsSpawn = {},
+	godlyKnivesSpawn = {},
+	godlyGunsSpawn = {},
+	uniqueKnivesSpawn = {},
+	uniqueGunsSpawn = {},
+}
+
+HUB_DROPDOWN_DEFAULTS = {}
+
+for k, v_2 in pairs(dropdownval) do
+	if typeof(v_2) == "table" then
+		local tbl2 = {}
+
+		for i, v_3 in ipairs(v_2) do
+			tbl2[i] = v_3
+		end
+
+		HUB_DROPDOWN_DEFAULTS[k] = tbl2
+	else
+		HUB_DROPDOWN_DEFAULTS[k] = v_2
+	end
+end
+
+HUB_DROPDOWN_VALUE_ALIASES = {}
+
+LangList = {
+	en = "English",
+	ru = "Русский",
+	es = "Español",
+	pt = "Português",
+	de = "Deutsch",
+	ar = "العربية",
+	fil = "Filipino",
+}
+
+HUB_LANG_CODES = { "en", "ru", "es", "pt", "de", "ar", "fil" }
+
+hubLanguageDropdownValues = function()
+	local tbl2 = {}
+
+	for _, v_2 in ipairs(HUB_LANG_CODES) do
+		tbl2[#tbl2 + 1] = LangList[v_2]
+	end
+
+	return tbl2
+end
+
+hubLanguageCode = function(arg)
+	if not arg then
+		return "en"
+	end
+
+	if LangList[arg] then
+		return arg
+	end
+
+	for k, v_2 in pairs(LangList) do
+		if v_2 == arg then
+			return k
+		end
+	end
+
+	return "en"
+end
+
+hubNormalizeDropdownValue = function(arg)
+	if arg == nil then
+		return nil
+	end
+
+	if typeof(arg) == "table" then
+		return arg.Title or arg[1] or arg.Name
+	end
+	return arg
+end
+
+hubNormalizeDropdownSelection = function(arg, arg2)
+	if not arg2 then
+		return hubNormalizeDropdownValue(arg)
+	end
+
+	if arg == nil then
+		return {}
+	end
+
+	if typeof(arg) ~= "table" then
+		return { arg }
+	end
+	local tbl2 = {}
+
+	for _, v_2 in ipairs(arg) do
+		local title = typeof(v_2) == "table" and (v_2.Title or v_2[1] or v_2.Name) or v_2
+
+		if title then
+			tbl2[#tbl2 + 1] = title
+		end
+	end
+
+	if #tbl2 == 0 then
+		for _, v_2 in pairs(arg) do
+			if typeof(v_2) ~= "number" then
+				local title = typeof(v_2) == "table" and (v_2.Title or v_2[1] or v_2.Name) or v_2
+
+				if title then
+					tbl2[#tbl2 + 1] = title
+				end
+			end
+		end
+	end
+
+	return tbl2
+end
+
+hubDropdownModes = function(arg)
+	local v_2 = dropdownval[arg]
+	if v_2 == nil then
+		return {}
+	end
+
+	if typeof(v_2) ~= "table" then
+		dropdownval[arg] = { v_2 }
+		return dropdownval[arg]
+	end
+
+	if #v_2 == 0 and next(v_2) ~= nil then
+		dropdownval[arg] = hubNormalizeDropdownSelection(v_2, true)
+		return dropdownval[arg]
+	end
+	return v_2
+end
+
+hubDropdownHas = function(arg, arg2)
+	return table.find(hubDropdownModes(arg), arg2) ~= nil
+end
+
+hubDropdownRawValue = function(arg, arg2)
+	local value = arg and arg.Value
+	local v_2 = dropdownval[arg2]
+
+	if arg and arg.Multi then
+		if typeof(value) == "table" then
+			return hubNormalizeDropdownSelection(value, true)
+		end
+
+		if typeof(v_2) == "table" then
+			return hubNormalizeDropdownSelection(v_2, true)
+		end
+		return {}
+	end
+
+	if value ~= nil then
+		if typeof(value) == "table" then
+			value = hubNormalizeDropdownValue(value)
+		end
+
+		if value ~= nil and value ~= "" then
+			return value
+		end
+	end
+
+	return v_2 ~= nil and v_2 or value
+end
+
+hubDropdownValueLabel = function(arg)
+	if typeof(arg) == "table" then
+		return arg.Title or arg[1] or arg.Name
+	end
+	return arg
+end
+
+hubDropdownDefaultFor = function(arg, arg2)
+	local v_2 = HUB_DROPDOWN_DEFAULTS[arg]
+
+	if arg2 then
+		local tbl2 = {}
+
+		if typeof(v_2) == "table" then
+			for i, v_3 in ipairs(v_2) do
+				tbl2[i] = v_3
+			end
+		end
+
+		return tbl2
+	end
+
+	if typeof(v_2) == "table" then
+		return v_2[1]
+	end
+	return v_2
+end
+
+hubDropdownValueCheckSkipped = function(arg, arg2)
+	if arg == "language" then
+		return true
+	end
+
+	if CDN_ASSET_SOURCE_BY_PICKER[arg] or CDN_ASSET_MAIN_BY_PICKER[arg] then
+		return true
+	end
+
+	if HUB_DROPDOWN_DEFAULTS[arg] == nil then
+		return true
+	end
+	return hubIsPlayerTargetDropdown(arg2)
+end
+
+hubSanitizeDropdownValue = function(arg, arg2, arg3, arg4)
+	if arg3 == nil then
+		return arg3
+	end
+	local v_2 = HUB_DROPDOWN_VALUE_ALIASES[arg]
+
+	if v_2 then
+		if arg4 and typeof(arg3) == "table" then
+			local tbl2 = {}
+
+			for i, v_3 in ipairs(arg3) do
+				tbl2[i] = v_2[hubDropdownValueLabel(v_3)] or v_3
+			end
+
+			arg3 = tbl2
+		else
+			arg3 = v_2[hubDropdownValueLabel(arg3)] or arg3
+		end
+	end
+
+	if hubDropdownValueCheckSkipped(arg, arg2) then
+		return arg3
+	end
+	local values_ = arg2 and arg2.Values
+	if typeof(values_) ~= "table" or #values_ == 0 then
+		return arg3
+	end
+	local tbl2 = {}
+
+	for _, v_3 in ipairs(values_) do
+		local v_4 = hubDropdownValueLabel(v_3)
+
+		if v_4 ~= nil then
+			tbl2[v_4] = true
+		end
+	end
+
+	if arg4 then
+		if typeof(arg3) ~= "table" then
+			return arg3
+		end
+		local tbl3 = {}
+		local v_3, v_4, v_5 = ipairs(arg3)
+		local n = 0
+
+		for _, v_6 in v_3, v_4, v_5 do
+			if tbl2[hubDropdownValueLabel(v_6)] then
+				tbl3[#tbl3 + 1] = v_6
+			else
+				n += 1
+			end
+		end
+
+		if n == 0 then
+			return arg3
+		end
+		configDbg("WARN", "apply", "dropdown values gone — trimmed", { flag = arg, dropped = n, kept = #tbl3 })
+		if #tbl3 > 0 or arg2.AllowNone == true then
+			return tbl3
+		end
+		return hubDropdownDefaultFor(arg, true)
+	end
+
+	if tbl2[hubDropdownValueLabel(arg3)] then
+		return arg3
+	end
+	local v_3 = hubDropdownDefaultFor(arg, false)
+
+	if v_3 == nil or not tbl2[hubDropdownValueLabel(v_3)] then
+		v_3 = hubDropdownValueLabel(values_[1])
+	end
+
+	configDbg("WARN", "apply", "dropdown value gone — default used", { flag = arg, saved = arg3, fallback = v_3 })
+	return v_3
+end
+
+hubApplyDropdownUi = function(arg, value, arg2, arg3)
+	if not arg or value == nil then
+		return
+	end
+
+	if (arg3 or arg.Flag) == "language" then
+		local v_2 = hubLanguageCode(value)
+		dropdownval.language = v_2
+		arg.Value = arg2 and v_2 or LangList[v_2] or value
+
+		if arg.Display then
+			pcall(arg.Display, arg)
+		end
+
+		return
+	end
+
+	arg.Value = value
+
+	if arg.Display then
+		pcall(arg.Display, arg)
+	end
+end
+
+hubFinalizeConfigApply = function()
+	if dropdownval.language and v_ and v_.SetLanguage then
+		pcall(function()
+			local v_2 = hubLanguageCode(dropdownval.language)
+			dropdownval.language = v_2
+			v_:SetLanguage(v_2)
+			lc = notify[v_2] or notify.en
+		end)
+	end
+
+	task.wait()
+
+	if type(onNameEspSettingsChanged) == "function" then
+		pcall(onNameEspSettingsChanged)
+	end
+
+	if type(onEspSettingsChanged) == "function" then
+		pcall(onEspSettingsChanged)
+	end
+
+	if values.gunDropEsp and type(highlightGunDrop) == "function" then
+		for _, v_2 in pairs(CollectionService:GetTagged("GunDrop")) do
+			pcall(highlightGunDrop, v_2)
+		end
+	end
+
+	task.wait()
+
+	if dropdownval.theme and v_ and v_.SetTheme then
+		pcall(function()
+			v_:SetTheme(dropdownval.theme)
+			applyHubTheme(dropdownval.theme)
+		end)
+	end
+
+	task.wait()
+	hubApplyForcedSafetyToggles("finalize")
+
+	if type(discordWebhookLoadFromDisk) == "function" then
+		pcall(discordWebhookLoadFromDisk)
+	end
+
+	if type(discordWebhookRefreshDropdown) == "function" then
+		pcall(discordWebhookRefreshDropdown, dropdownval.discordWebhookSaved)
+	end
+
+	pcall(function()
+		if Circle then
+			Circle.Radius = valueslider.KnifeFOVSize
+			Circle.Visible = values.KnifeShowFOV and values.KnifeAimEnabled and localPlayerHasKnife()
+		end
+
+		if PredictionIndicator then
+			PredictionIndicator.Visible = values.KnifeShowPrediction and values.KnifeAimEnabled and localPlayerHasKnife()
+		end
+	end)
+
+	pcall(function()
+		local num = tonumber(valueslider.hitboxSizeScalar)
+
+		if num then
+			values.HitboxSize = Vector3.new(num, num, num)
+		end
+	end)
+
+	pcall(function()
+		local num = tonumber(valueslider.fpsCap)
+		if not num then
+			return
+		end
+		local setfpscap_ = func and func.setfpscap
+
+		if type(setfpscap_) ~= "function" then
+			setfpscap_ = setfpscap
+		end
+
+		if type(setfpscap_) == "function" then
+			setfpscap_(num)
+		end
+	end)
+
+	pcall(function()
+		local hubToggleKey = valuekeys and valuekeys.hubToggleKey
+
+		if type(hubToggleKey) == "string" and Window and Window.SetToggleKey then
+			local v_2 = Enum.KeyCode[hubToggleKey]
+
+			if v_2 then
+				Window:Se
