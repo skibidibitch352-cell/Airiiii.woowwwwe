@@ -1,0 +1,212 @@
+-- AiriHub NPC Targeting Test
+-- For Roblox Studio test places you own.
+-- Place this LocalScript in StarterPlayer > StarterPlayerScripts.
+-- Tag your test dummy Models with CollectionService tag "TestNPC".
+-- This demo highlights the nearest valid NPC; it does not aim at or affect players.
+
+local Players = game:GetService("Players")
+local CollectionService = game:GetService("CollectionService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local old = playerGui:FindFirstChild("AiriHubTestUI")
+if old then old:Destroy() end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AiriHubTestUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = playerGui
+
+local function make(className, props, parent)
+    local obj = Instance.new(className)
+    for k, v in pairs(props) do obj[k] = v end
+    obj.Parent = parent
+    return obj
+end
+
+local loading = make("Frame", {
+    Name = "Loading",
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.fromScale(0.5, 0.5),
+    Size = UDim2.fromOffset(280, 112),
+    BackgroundColor3 = Color3.fromRGB(22, 22, 30),
+    BorderSizePixel = 0,
+}, gui)
+make("UICorner", {CornerRadius = UDim.new(0, 12)}, loading)
+make("TextLabel", {
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(12, 12),
+    Size = UDim2.new(1, -24, 0, 32),
+    Font = Enum.Font.GothamBold,
+    Text = "AiriHub",
+    TextColor3 = Color3.fromRGB(190, 150, 255),
+    TextSize = 24,
+}, loading)
+make("TextLabel", {
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(12, 47),
+    Size = UDim2.new(1, -24, 0, 20),
+    Font = Enum.Font.Gotham,
+    Text = "Loading NPC test tools...",
+    TextColor3 = Color3.fromRGB(220, 220, 230),
+    TextSize = 13,
+}, loading)
+local barBack = make("Frame", {
+    Position = UDim2.fromOffset(16, 78),
+    Size = UDim2.new(1, -32, 0, 8),
+    BackgroundColor3 = Color3.fromRGB(52, 48, 64),
+    BorderSizePixel = 0,
+}, loading)
+make("UICorner", {CornerRadius = UDim.new(1, 0)}, barBack)
+local bar = make("Frame", {
+    Size = UDim2.fromScale(0, 1),
+    BackgroundColor3 = Color3.fromRGB(190, 150, 255),
+    BorderSizePixel = 0,
+}, barBack)
+make("UICorner", {CornerRadius = UDim.new(1, 0)}, bar)
+
+TweenService:Create(bar, TweenInfo.new(0.8), {Size = UDim2.fromScale(1, 1)}):Play()
+task.wait(0.9)
+loading:Destroy()
+
+local panel = make("Frame", {
+    Name = "Main",
+    Position = UDim2.fromOffset(24, 150),
+    Size = UDim2.fromOffset(260, 180),
+    BackgroundColor3 = Color3.fromRGB(22, 22, 30),
+    BorderSizePixel = 0,
+}, gui)
+make("UICorner", {CornerRadius = UDim.new(0, 12)}, panel)
+make("UIStroke", {Color = Color3.fromRGB(115, 86, 165), Thickness = 1}, panel)
+
+make("TextLabel", {
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(14, 8),
+    Size = UDim2.new(1, -28, 0, 30),
+    Font = Enum.Font.GothamBold,
+    Text = "AiriHub  •  NPC Lab",
+    TextColor3 = Color3.fromRGB(190, 150, 255),
+    TextSize = 18,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, panel)
+
+local status = make("TextLabel", {
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(14, 42),
+    Size = UDim2.new(1, -28, 0, 38),
+    Font = Enum.Font.Gotham,
+    Text = "Target: none",
+    TextColor3 = Color3.fromRGB(230, 230, 240),
+    TextSize = 13,
+    TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+}, panel)
+
+local enabled = false
+local currentHighlight
+local currentTarget
+local function clearTarget()
+    if currentHighlight then
+        currentHighlight:Destroy()
+        currentHighlight = nil
+    end
+    currentTarget = nil
+    status.Text = "Target: none"
+end
+
+local toggle = make("TextButton", {
+    Position = UDim2.fromOffset(14, 88),
+    Size = UDim2.new(1, -28, 0, 34),
+    BackgroundColor3 = Color3.fromRGB(95, 65, 140),
+    BorderSizePixel = 0,
+    Font = Enum.Font.GothamSemibold,
+    Text = "NPC Target Test: OFF",
+    TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 13,
+    AutoButtonColor = true,
+}, panel)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, toggle)
+
+local rescan = make("TextButton", {
+    Position = UDim2.fromOffset(14, 130),
+    Size = UDim2.new(1, -28, 0, 30),
+    BackgroundColor3 = Color3.fromRGB(44, 43, 56),
+    BorderSizePixel = 0,
+    Font = Enum.Font.Gotham,
+    Text = "Clear target",
+    TextColor3 = Color3.fromRGB(235, 235, 245),
+    TextSize = 12,
+}, panel)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, rescan)
+
+toggle.Activated:Connect(function()
+    enabled = not enabled
+    toggle.Text = enabled and "NPC Target Test: ON" or "NPC Target Test: OFF"
+    toggle.BackgroundColor3 = enabled and Color3.fromRGB(115, 78, 170) or Color3.fromRGB(95, 65, 140)
+    if not enabled then clearTarget() end
+end)
+
+rescan.Activated:Connect(clearTarget)
+
+local function getNPCRoot(model)
+    if not model or not model:IsA("Model") then return nil end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    local root = model:FindFirstChild("HumanoidRootPart")
+    if hum and hum.Health > 0 and root and root:IsA("BasePart") then
+        return root
+    end
+    return nil
+end
+
+local function findNearestNPC()
+    local character = player.Character
+    local myRoot = character and character:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+
+    local best, bestDistance = nil, math.huge
+    for _, npc in ipairs(CollectionService:GetTagged("TestNPC")) do
+        if npc:IsA("Model") and not npc:IsDescendantOf(character) then
+            local root = getNPCRoot(npc)
+            if root then
+                local distance = (root.Position - myRoot.Position).Magnitude
+                if distance < bestDistance and distance <= 250 then
+                    best, bestDistance = npc, distance
+                end
+            end
+        end
+    end
+    return best, bestDistance
+end
+
+RunService.Heartbeat:Connect(function()
+    if not enabled then return end
+
+    local npc, distance = findNearestNPC()
+    if npc ~= currentTarget then
+        clearTarget()
+        if npc then
+            currentTarget = npc
+            currentHighlight = Instance.new("Highlight")
+            currentHighlight.Name = "AiriHubTestHighlight"
+            currentHighlight.FillColor = Color3.fromRGB(190, 150, 255)
+            currentHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+            currentHighlight.FillTransparency = 0.65
+            currentHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            currentHighlight.Adornee = npc
+            currentHighlight.Parent = gui
+        end
+    end
+
+    if npc and distance then
+        status.Text = ("NPC: %s\nDistance: %d studs"):format(npc.Name, math.floor(distance))
+    else
+        status.Text = "Target: no tagged NPC within 250 studs"
+    end
+end)
+
+gui.Destroying:Connect(clearTarget)
